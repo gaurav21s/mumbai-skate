@@ -33,6 +33,7 @@ static void drawBalanceMeter(float y, const char* label) {
     float nx = cx + clampf(P.balance, -1, 1) * w / 2;
     rect2D(nx - 3, y - 6, nx + 3, y + 20, 1, 1, 1, 1);
     int lw = bmpWidth(label, GLUT_BITMAP_HELVETICA_12);
+    rect2D(cx - (float)lw / 2 - 6, y + 19, cx + (float)lw / 2 + 6, y + 37, 0.04f, 0.05f, 0.08f, 0.55f);
     bmpTextShadow(cx - (float)lw / 2, y + 24, label, COL_WHITE, GLUT_BITMAP_HELVETICA_12);
 }
 
@@ -314,6 +315,7 @@ static void drawObjectiveArrow(float cx, float cy) {
     char buf[160];
     snprintf(buf, sizeof(buf), "%s  %d M", label.c_str(), (int)dist);
     int w = bmpWidth(buf, GLUT_BITMAP_HELVETICA_12);
+    roundRect(cx - (float)w / 2 - 8, cy - 49, cx + (float)w / 2 + 8, cy - 31, 5, 0.04f, 0.05f, 0.08f, 0.55f);
     bmpTextShadow(cx - (float)w / 2, cy - 44, buf, c, GLUT_BITMAP_HELVETICA_12);
 }
 
@@ -492,13 +494,15 @@ static void drawTitle(float W, float H) {
                                                                  : "CONTINUE  (CHAPTER " + std::to_string(g_unlockLevel + 1) + ")";
         }
         if (row == 1) { label = "DIFFICULTY"; value = DIFFS[g_diff].name; }
-        if (row == 2) { label = "TUTORIAL"; value = g_tutorialChoice ? "ON" : "OFF"; }
-        if (row == 3) label = g_newGameArmed ? "NEW GAME: PRESS ENTER AGAIN TO ERASE" : "NEW GAME";
-        if (row == 4) label = "QUIT";
+        if (row == 2) { label = "GRAPHICS"; value = GFXS[g_gfx].name; }
+        if (row == 3) { label = "TUTORIAL"; value = g_tutorialChoice ? "ON" : "OFF"; }
+        if (row == 4) label = g_newGameArmed ? "NEW GAME: PRESS ENTER AGAIN TO ERASE" : "NEW GAME";
+        if (row == 5) label = "QUIT";
         menuRow(x, my, w, i == g_menuSel, label, value);
         my -= 46;
     }
-    bmpTextShadow(x, my + 6, DIFFS[g_diff].blurb, C(0.7f, 0.78f, 0.9f), GLUT_BITMAP_HELVETICA_12);
+    bool gfxRow = titleRow(g_menuSel) == 2;
+    bmpTextShadow(x, my + 6, gfxRow ? GFXS[g_gfx].blurb : DIFFS[g_diff].blurb, C(0.7f, 0.78f, 0.9f), GLUT_BITMAP_HELVETICA_12);
     if (g_hasProgress) {
         char buf[128];
         snprintf(buf, sizeof(buf), "Saved: score %s    RS %d    crew %d/4    %d deliveries", withCommas(g_score).c_str(),
@@ -511,17 +515,19 @@ static void drawTitle(float W, float H) {
 
 static void drawPause(float W, float H) {
     panelBox(0, 0, W, H, 0.45f);
-    float w = 460, h = 300, x0 = W / 2 - w / 2, y0 = H / 2 - h / 2;
+    float w = 460, h = 340, x0 = W / 2 - w / 2, y0 = H / 2 - h / 2;
     panelBox(x0, y0, x0 + w, y0 + h, 0.85f);
     roundRect(x0, y0 + h - 5, x0 + w, y0 + h, 2, 1.0f, 0.75f, 0.25f, 1.0f);
     strokeText2D("PAUSED", W / 2, y0 + h - 52, 36, 0.5f, COL_WHITE, 1.0f);
-    const char* labels[4] = {"RESUME", "DIFFICULTY", g_tutorial ? "SKIP TUTORIAL" : "PLAY TUTORIAL", "QUIT"};
+    const char* labels[5] = {"RESUME", "DIFFICULTY", "GRAPHICS", g_tutorial ? "SKIP TUTORIAL" : "PLAY TUTORIAL", "QUIT"};
     float y = y0 + h - 110;
-    for (int i = 0; i < 4; i++) {
-        menuRow(x0 + 40, y, w - 60, g_menuSel == i, labels[i], i == 1 ? DIFFS[g_diff].name : "");
+    for (int i = 0; i < 5; i++) {
+        menuRow(x0 + 40, y, w - 60, g_menuSel == i, labels[i],
+                i == 1 ? DIFFS[g_diff].name : (i == 2 ? GFXS[g_gfx].name : ""));
         y -= 42;
     }
-    bmpTextShadow(x0 + 40, y0 + 18, DIFFS[g_diff].blurb, C(0.7f, 0.78f, 0.9f), GLUT_BITMAP_HELVETICA_10);
+    bmpTextShadow(x0 + 40, y0 + 18, g_menuSel == 2 ? GFXS[g_gfx].blurb : DIFFS[g_diff].blurb, C(0.7f, 0.78f, 0.9f),
+                  GLUT_BITMAP_HELVETICA_10);
 }
 
 struct HelpLine { const char* text; int need; };
@@ -692,7 +698,10 @@ static void drawHUD() {
         strokeText2D("MUMBAI SKATE", W / 2, H * 0.93f, 30, 0.5f, C(1.0f, 0.55f, 0.2f), clampf(6.0f - g_time, 0, 1));
 
     if (g_showHelp) drawHelp();
-    else bmpTextShadow(14, 14, "H  show controls", C(0.8f, 0.8f, 0.8f), GLUT_BITMAP_HELVETICA_12);
+    else {
+        roundRect(8, 8, 136, 30, 5, 0.04f, 0.05f, 0.08f, 0.5f);
+        bmpTextShadow(16, 14, "H  show controls", C(0.8f, 0.8f, 0.8f), GLUT_BITMAP_HELVETICA_12);
+    }
     if (g_shopOpen) drawShop(W, H);
     if (g_menu == MENU_PAUSE) drawPause(W, H);
     hudEnd();
@@ -709,13 +718,19 @@ static void render() {
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     g_fov = lerpf(g_fov, 64.0f + clampf(hspeed() - 6.0f, 0, 14) * 0.7f + (g_boostT > 0 ? 8.0f : 0.0f), 0.05f);
-    gluPerspective(g_fov, (double)g_winW / (double)std::max(1, g_winH), 0.2, 700.0);
+    float dist = G().drawDist;
+    gluPerspective(g_fov, (double)g_winW / (double)std::max(1, g_winH), 0.2, (double)dist + 120.0);
+#ifdef GL_MULTISAMPLE
+    if (G().msaa) glEnable(GL_MULTISAMPLE);
+    else glDisable(GL_MULTISAMPLE);
+#endif
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     V3 shake(sinf(g_time * 47.0f), sinf(g_time * 39.0f + 1.0f), sinf(g_time * 53.0f + 2.0f));
     shake *= g_shake * 0.25f;
     V3 eye = g_camPos + shake;
     gluLookAt(eye.x, eye.y, eye.z, g_camLook.x, g_camLook.y, g_camLook.z, 0, 1, 0);
+    g_frustum = currentFrustum();
     GLfloat lp[4] = {SUN_DIR.x, SUN_DIR.y, SUN_DIR.z, 0.0f};
     glLightfv(GL_LIGHT0, GL_POSITION, lp);
     GLfloat fp[4] = {0.5f, 0.35f, -0.6f, 0.0f};
@@ -725,13 +740,17 @@ static void render() {
     glLightfv(GL_LIGHT0, GL_DIFFUSE, dif);
     GLfloat fogc[4] = {fog.r, fog.g, fog.b, 1};
     glFogfv(GL_FOG_COLOR, fogc);
-    glFogf(GL_FOG_END, 290.0f - 150.0f * g_rain);
+    // fog closes in before the draw distance so tiles never pop in visibly
+    float fogEnd = std::min(290.0f - 150.0f * g_rain, dist * 0.95f);
+    glFogf(GL_FOG_START, fogEnd * 0.25f);
+    glFogf(GL_FOG_END, fogEnd);
     glEnable(GL_FOG);
     if (g_rain < 0.6f) drawSun();
     gLighting(true);
-    glCallList(g_worldList);
+    g_drawnVerts = 0;
+    drawChunks(g_worldChunks, g_frustum, g_camPos, dist);
     drawDynamicOpaque();
-    drawShadowPass();
+    if (G().worldShadows || G().dynShadows > 0) drawShadowPass();
     drawDynamicTransparent();
     drawHUD();
 }

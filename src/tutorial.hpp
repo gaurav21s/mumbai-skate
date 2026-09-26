@@ -240,11 +240,16 @@ static void resetProgress() {
     g_hasProgress = false;
 }
 
-static int titleItems() { return g_hasProgress ? 5 : 4; }
-// title rows: play, difficulty, tutorial, [new game], quit
+static int titleItems() { return g_hasProgress ? 6 : 5; }
+// title rows: play, difficulty, graphics, tutorial, [new game], quit
 static int titleRow(int sel) {
-    if (!g_hasProgress && sel >= 3) return sel + 1;
+    if (!g_hasProgress && sel >= 4) return sel + 1;
     return sel;
+}
+
+static void changeGraphics(int d) {
+    g_gfx = (g_gfx + d + 3) % 3;
+    saveGame();
 }
 
 static void startPlaying() {
@@ -275,10 +280,11 @@ static void menuKey(int key) {
         if (key != 4) g_newGameArmed = g_newGameArmed && key != 0 && key != 1;
         int row = titleRow(g_menuSel);
         if (row == 1 && (key == 2 || key == 3 || key == 4)) changeDifficulty(key == 2 ? -1 : 1);
-        if (row == 2 && (key == 2 || key == 3 || key == 4)) g_tutorialChoice = !g_tutorialChoice;
+        if (row == 2 && (key == 2 || key == 3 || key == 4)) changeGraphics(key == 2 ? -1 : 1);
+        if (row == 3 && (key == 2 || key == 3 || key == 4)) g_tutorialChoice = !g_tutorialChoice;
         if (key == 4) {
             if (row == 0) startPlaying();
-            if (row == 3) {
+            if (row == 4) {
                 if (!g_newGameArmed) {
                     g_newGameArmed = true;
                 } else {
@@ -288,19 +294,20 @@ static void menuKey(int key) {
                     startPlaying();
                 }
             }
-            if (row == 4) g_quitRequested = true;
+            if (row == 5) g_quitRequested = true;
         }
         if (key == 5) g_quitRequested = true;
         return;
     }
     if (g_menu == MENU_PAUSE) {
-        const int n = 4;
+        const int n = 5;
         if (key == 0) g_menuSel = (g_menuSel + n - 1) % n;
         if (key == 1) g_menuSel = (g_menuSel + 1) % n;
         if (g_menuSel == 1 && (key == 2 || key == 3 || key == 4)) changeDifficulty(key == 2 ? -1 : 1);
+        if (g_menuSel == 2 && (key == 2 || key == 3 || key == 4)) changeGraphics(key == 2 ? -1 : 1);
         if (key == 4) {
             if (g_menuSel == 0) g_menu = MENU_NONE;
-            if (g_menuSel == 2) {
+            if (g_menuSel == 3) {
                 g_menu = MENU_NONE;
                 if (g_tutorial) {
                     g_tutorial = false;
@@ -309,7 +316,7 @@ static void menuKey(int key) {
                     startTutorial();
                 }
             }
-            if (g_menuSel == 3) g_quitRequested = true;
+            if (g_menuSel == 4) g_quitRequested = true;
         }
         if (key == 5) g_menu = MENU_NONE;
     }

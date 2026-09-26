@@ -15,7 +15,7 @@
 // ============================================================================
 
 static const V3 SUN_DIR(-0.45f, 0.62f, 0.64f);  // toward the sun
-static GLuint g_worldShadowList = 0;
+static std::vector<Chunk> g_shadowChunks;
 static size_t g_shadowVerts = 0;
 
 // Ground height on a 1 m grid, sampled from the collision world.
@@ -80,15 +80,10 @@ static void bakeWorldShadows(Mesh& m) {
         }
     }
     g_shadowVerts = sv.size() / 3;
-    g_worldShadowList = glGenLists(1);
-    glEnableClientState(GL_VERTEX_ARRAY);
-    glNewList(g_worldShadowList, GL_COMPILE);
-    if (!sv.empty()) {
-        glVertexPointer(3, GL_FLOAT, 0, sv.data());
-        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)g_shadowVerts);
-    }
-    glEndList();
-    glDisableClientState(GL_VERTEX_ARRAY);
+    Mesh sm;
+    sm.uv = sv;
+    sm.uc.assign(g_shadowVerts * 4, 0);
+    buildChunks(sm, g_shadowChunks, 32.0f);
 }
 
 // Pushes a matrix that squashes whatever is drawn next onto the plane y = h.

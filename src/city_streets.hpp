@@ -359,12 +359,14 @@ static void poster(float cx, float cy, float w, float h, float z) {
     setc(bg);
     rectZ(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, z);
     setc(mulc(SAREES[irange(0, 7)], 0.9f));
-    if (frand() < 0.5f) discZ(cx, cy + h * 0.1f, std::min(w, h) * 0.28f, z + 0.002f, 12);
+    if (frand() < 0.5f) discZ(cx, cy + h * 0.1f, std::min(w, h) * 0.28f, z + 0.002f, 8);
     else rectZ(cx - w * 0.35f, cy - h * 0.1f, cx + w * 0.35f, cy + h * 0.35f, z + 0.002f);
-    gPush();
-    gTranslate(cx, cy - h * 0.38f, z + 0.004f);
-    text3DFit(POSTER_WORDS[irange(0, 13)], h * 0.16f, w * 0.85f, bg.r + bg.g + bg.b > 1.8f ? COL_BLACK : COL_WHITE);
-    gPop();
+    // two lines of print; real words at this size cost thousands of vertices nobody can read
+    (void)POSTER_WORDS[irange(0, 13)];  // keeps the random sequence, and so the city, unchanged
+    Col ink = bg.r + bg.g + bg.b > 1.8f ? COL_BLACK : COL_WHITE;
+    setc(ink);
+    rectZ(cx - w * 0.38f, cy - h * 0.36f, cx + w * 0.38f, cy - h * 0.29f, z + 0.004f);
+    rectZ(cx - w * 0.28f, cy - h * 0.45f, cx + w * 0.28f, cy - h * 0.4f, z + 0.004f);
 }
 
 // Cluster of overlapping posters on a wall region.

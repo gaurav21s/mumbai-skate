@@ -772,7 +772,7 @@ static void saveGame() {
     fprintf(f, "owned");
     for (int i = 0; i < GEAR_COUNT; i++) fprintf(f, " %d", g_owned[i] ? 1 : 0);
     fprintf(f, "\ndeck %d\noutfit %d\ndifficulty %d\ntutorial %d\n", g_deck, g_outfit, g_diff, g_tutorialDone ? 1 : 0);
-    fprintf(f, "wear %d %d %d %d\nenergy %.1f\nxp %ld\n", g_hat, g_glasses, g_neck, g_bag, g_energy, g_xp);
+    fprintf(f, "wear %d %d %d %d\nenergy %.1f\nxp %ld\ngraphics %d\n", g_hat, g_glasses, g_neck, g_bag, g_energy, g_xp, g_gfx);
     Chapter* c = curChapter();
     if (c && c->timeLimit <= 0) {
         fprintf(f, "goals");
@@ -811,6 +811,7 @@ static bool loadGame() {
         else if (k == "tutorial") g_tutorialDone = atoi(rest) != 0;
         else if (k == "energy") g_energy = clampf((float)atof(rest), 0, 100);
         else if (k == "xp") g_xp = std::max(0L, atol(rest));
+        else if (k == "graphics") g_gfx = (int)clampf((float)atoi(rest), 0, 2);
         else if (k == "wear") sscanf(rest, "%d %d %d %d", &g_hat, &g_glasses, &g_neck, &g_bag);
         else if (k == "friends" || k == "owned" || k == "goals") {
             std::vector<int> v;

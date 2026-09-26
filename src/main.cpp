@@ -38,16 +38,21 @@
  *
  * Developer options (none of these touch the save file, and all skip the title screen)
  *   --selftest              run scripted physics, career and mission checks, print results, quit
+ *   --bench                 time the three graphics presets from fixed views, print, quit
  *   --level N               start with N chapters finished
  *   --unlockall             start as a legend with everything open
  *   --shot out.ppm 3        play for 3 seconds of game time, save a PPM screenshot, quit
  *   --at x y z yawDeg       start somewhere else (y is ground height, 0.18 on sidewalks)
  *   --push                  hold W during a --shot run
+ *   --graphics low|medium|high   pick the graphics preset for this run (also in the menus)
  *
  * Controls are listed in the in-game panel (H hides it).
  */
 
 #include "core.hpp"
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include "collision.hpp"
 #include "actors.hpp"
 #include "city_streets.hpp"
@@ -142,7 +147,59 @@ static void saveScreenshot(const char* path) {
     printf("saved %s (%dx%d)\n", path, g_winW, g_winH);
 }
 
+static int g_lastFrameMs = 0;  // when the last frame started, for the frame cap
+static bool g_visible = true;
+
+// --bench: renders fixed views as fast as possible and prints the frame time.
+static bool g_bench = false;
+// Vsync on (1) or off (0). Only wired up on macOS; elsewhere the driver decides.
+static void setSwapInterval(int n) {
+#ifdef __APPLE__
+    GLint v = n;
+    CGLSetParameter(CGLGetCurrentContext(), kCGLCPSwapInterval, &v);
+#else
+    (void)n;
+#endif
+}
+
+static void runBench() {
+    setSwapInterval(0);
+    struct Spot { V3 p; float yaw; const char* name; };
+    const Spot spots[] = {{SPAWN_POS, SPAWN_YAW, "plaza"},
+                          {V3(-60, 0.18f, 10), PI * 0.5f, "main road"},
+                          {V3(60, 0, -30), PI, "site"},
+                          {V3(0, 0.18f, 130), 0.0f, "sea face"},
+                          {V3(-80, 3.4f, -70), PI * 0.5f, "skywalk"}};
+    for (int gfx = GFX_LOW; gfx <= GFX_HIGH; gfx++) {
+        g_gfx = gfx;
+        float total = 0;
+        size_t verts = 0;
+        for (const Spot& s : spots) {
+            resetPlayer(s.p, s.yaw);
+            g_camInit = false;
+            updateCamera(0, true);
+            for (int i = 0; i < 5; i++) render();
+            glFinish();
+            int t0 = glutGet(GLUT_ELAPSED_TIME);
+            const int N = 60;
+            for (int i = 0; i < N; i++) {
+                g_time += 1.0f / 60.0f;
+                render();
+                glutSwapBuffers();
+            }
+            glFinish();
+            total += (float)(glutGet(GLUT_ELAPSED_TIME) - t0) / (float)N;
+            verts += g_drawnVerts;
+        }
+        printf("%-6s  %6.2f ms per frame  (%3.0f fps uncapped, cap %d)   %6.0fk city vertices drawn\n", GFXS[gfx].name,
+               total / 5.0f, 5000.0f / total, GFXS[gfx].fps, (float)verts / 5000.0f);
+    }
+    exit(0);
+}
+
 static void display() {
+    if (g_bench) runBench();
+    g_lastFrameMs = glutGet(GLUT_ELAPSED_TIME);
     int ms = glutGet(GLUT_ELAPSED_TIME);
     if (g_lastMs < 0) g_lastMs = ms;
     float dt = clampf((float)(ms - g_lastMs) / 1000.0f, 0.0f, 0.05f);
@@ -196,7 +253,25 @@ static void display() {
     glutSwapBuffers();
 }
 
-static void idle() { glutPostRedisplay(); }
+// Sleeps until the next frame is due instead of drawing flat out. Menus and
+// the shop run at 20 fps; a hidden window draws nothing.
+static void idle() {
+    int cap = (g_menu != MENU_NONE || g_shopOpen) ? 20 : G().fps;
+    if (g_shotFile || g_bench) cap = 1000;
+    if (!g_visible) cap = 2;
+    float target = 1000.0f / (float)cap;
+    float since = (float)(glutGet(GLUT_ELAPSED_TIME) - g_lastFrameMs);
+    if (since < target - 0.5f) {
+        float wait = target - since - 0.5f;
+#ifdef _WIN32
+        Sleep((DWORD)wait);
+#else
+        usleep((useconds_t)(wait * 1000.0f));
+#endif
+    }
+    if (g_visible) glutPostRedisplay();
+}
+static void visibility(int state) { g_visible = state == GLUT_VISIBLE; }
 
 static void reshape(int w, int h) {
     g_winW = std::max(1, w);
@@ -279,8 +354,14 @@ int main(int argc, char** argv) {
     bool customSpawn = false;
     bool newGame = false;
     int forceLevel = -1;
+    int gfxArg = -1;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--selftest")) test = true;
+        else if (!strcmp(argv[i], "--bench")) g_bench = true;
+        else if (!strcmp(argv[i], "--graphics") && i + 1 < argc) {
+            std::string v = argv[++i];
+            gfxArg = v == "low" ? GFX_LOW : (v == "high" ? GFX_HIGH : GFX_MEDIUM);
+        }
         else if (!strcmp(argv[i], "--newgame")) newGame = true;
         else if (!strcmp(argv[i], "--unlockall")) forceLevel = 99;
         else if (!strcmp(argv[i], "--level") && i + 1 < argc) forceLevel = atoi(argv[++i]);
@@ -329,10 +410,10 @@ int main(int argc, char** argv) {
     recBegin();
     buildWorld();
     bakeWorldShadows(g_recMesh);
-    g_worldList = recEnd();
+    recEndChunks(g_worldChunks, 32.0f);
     if (g_shotFile || test)
-        printf("world built at %.2fs, %d vertices, %d shadow vertices\n", (float)glutGet(GLUT_ELAPSED_TIME) / 1000.0f,
-               (int)g_worldVerts, (int)g_shadowVerts);
+        printf("world built at %.2fs, %d vertices in %d tiles, %d shadow vertices\n",
+               (float)glutGet(GLUT_ELAPSED_TIME) / 1000.0f, (int)g_worldVerts, (int)g_worldChunks.size(), (int)g_shadowVerts);
     initChapters();
     initFriends();
     rollAllJobs();
@@ -347,7 +428,8 @@ int main(int argc, char** argv) {
         return selfTest();
     }
 
-    if (g_shotFile || forceLevel >= 0) g_noSave = true;
+    if (g_shotFile || forceLevel >= 0 || g_bench) g_noSave = true;
+    if (g_bench) forceLevel = 3;
     if (forceLevel >= 0) {
         g_unlockLevel = std::min(forceLevel, (int)g_chapters.size());
         const int friendByChapter[4] = {1, 3, 4, 5};  // chapter whose tasks include that friend's mission
@@ -355,6 +437,7 @@ int main(int argc, char** argv) {
     } else if (!newGame && !g_noSave && loadGame()) {
         printf("Loaded save from %s (chapter %d)\n", savePath().c_str(), g_unlockLevel + 1);
     }
+    if (gfxArg >= 0) g_gfx = gfxArg;  // overrides the saved setting for this run
     if (!g_noSave) atexit(saveGame);
     g_hasProgress = g_unlockLevel > 0 || g_score > 0;
     g_tutorialChoice = !g_tutorialDone;
@@ -374,6 +457,8 @@ int main(int argc, char** argv) {
     }
     glutDisplayFunc(display);
     glutIdleFunc(idle);
+    glutVisibilityFunc(visibility);
+    setSwapInterval(1);  // never draw faster than the screen refreshes
     glutReshapeFunc(reshape);
     glutIgnoreKeyRepeat(1);
     glutKeyboardFunc(keyDown);

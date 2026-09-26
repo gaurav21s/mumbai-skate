@@ -76,6 +76,30 @@ static const DiffTune DIFFS[3] = {
      1.0f, 0.0f, 45.0f, 9.0f, 0.5f, 0.75f, 1.0f, 8.2f, 1.0f, 1.0f, 1.0f, 0.34f, 1.0f, -21.0f, false, true},
 };
 static int g_diff = DIFF_MEDIUM;
+
+// ---------------------------------------------------------------- graphics
+// Three presets trade looks for heat and battery. The frame cap matters most:
+// an uncapped game keeps the graphics chip at full load the whole time.
+enum GfxLevel { GFX_LOW, GFX_MEDIUM, GFX_HIGH };
+struct GfxTune {
+    const char* name;
+    const char* blurb;
+    int fps;            // frame cap
+    float drawDist;     // metres; fog hides the edge
+    bool msaa;
+    bool worldShadows;  // baked sun shadows of the city
+    int dynShadows;     // 0 skater only, 1 plus traffic and friends, 2 plus pedestrians
+    bool clouds;
+    float rainMul;
+    float pedDist;      // pedestrians further than this are not drawn
+};
+static const GfxTune GFXS[3] = {
+    {"LOW", "30 fps, short view, simple shadows. Coolest and longest battery.", 30, 130.0f, false, false, 0, false, 0.35f, 60.0f},
+    {"MEDIUM", "60 fps, medium view, city and traffic shadows.", 60, 200.0f, true, true, 1, true, 0.7f, 90.0f},
+    {"HIGH", "60 fps, full view and every shadow. Runs warmest.", 60, 290.0f, true, true, 2, true, 1.0f, 140.0f},
+};
+static int g_gfx = GFX_MEDIUM;
+static const GfxTune& G() { return GFXS[g_gfx]; }
 static const DiffTune& D() { return DIFFS[g_diff]; }
 static float comboGrace() { return D().grace; }
 static const V3 SPAWN_POS(-24.0f, 0.0f, -28.0f);  // lined up with the first kicker

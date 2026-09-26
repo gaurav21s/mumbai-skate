@@ -6,7 +6,8 @@
 // ============================================================================
 
 static int g_winW = 1280, g_winH = 720;
-static GLuint g_worldList = 0;
+static Frustum g_frustum;  // of the current frame, for culling
+static Mesh g_playerMesh, g_friendMesh[5];  // riders posed this frame, in world space
 static float g_time = 0;
 static bool g_showHelp = true;
 static int g_camMode = 0;
@@ -517,7 +518,8 @@ static void drawShadows() {
     glPolygonOffset(-2.0f, -4.0f);
     float gy = groundAt(P.pos.x, P.pos.z, P.pos.y + 0.1f).h;
     float h = P.pos.y - gy;
-    blobShadow(P.pos.x, P.pos.z, gy + 0.02f, 0.4f + h * 0.05f, std::max(0.05f, 0.22f - h * 0.05f));
+    float base = G().worldShadows ? 0.22f : 0.4f;  // on low this blob is the only shadow
+    blobShadow(P.pos.x, P.pos.z, gy + 0.02f, 0.4f + h * 0.05f, std::max(0.05f, base - h * 0.05f));
     glDisable(GL_POLYGON_OFFSET_FILL);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
@@ -923,6 +925,36 @@ static void drawKites() {
     }
 }
 
+// Cheap visibility tests for moving things, against this frame's view.
+static bool seen(float x0, float y0, float z0, float x1, float y1, float z1) {
+    float lo[3] = {x0, y0, z0}, hi[3] = {x1, y1, z1};
+    return boxVisible(g_frustum, lo, hi);
+}
+static bool vehicleSeen(const Vehicle& v) {
+    float x0, z0, x1, z1;
+    vehBounds(v, x0, z0, x1, z1);
+    float cx = (x0 + x1) * 0.5f - g_camPos.x, cz = (z0 + z1) * 0.5f - g_camPos.z;
+    if (cx * cx + cz * cz > G().drawDist * G().drawDist) return false;
+    return seen(x0, 0, z0, x1, v.hgt, z1);
+}
+static bool pedSeen(const Ped& p) {
+    float dx = p.pos.x - g_camPos.x, dz = p.pos.z - g_camPos.z;
+    if (dx * dx + dz * dz > G().pedDist * G().pedDist) return false;
+    return seen(p.pos.x - 0.6f, p.pos.y, p.pos.z - 0.6f, p.pos.x + 0.6f, p.pos.y + 2.2f, p.pos.z + 0.6f);
+}
+static void drawTrainCulled(const Train& t) {
+    for (int i = 0; i < t.cars; i++) {
+        float front = t.x - (float)t.dir * (float)i * (TRAIN_CAR_L + TRAIN_GAP);
+        float xa = t.dir > 0 ? front - TRAIN_CAR_L : front;
+        if (fabsf(xa + TRAIN_CAR_L * 0.5f - g_camPos.x) > G().drawDist + 20.0f) continue;
+        if (!seen(xa, DECK_TOP, t.z - 2.0f, xa + TRAIN_CAR_L, DECK_TOP + 5.0f, t.z + 2.0f)) continue;
+        gPush();
+        gTranslate(xa, 0, t.z);
+        drawMesh(t.carLists[i]);
+        gPop();
+    }
+}
+
 // Everything solid that moves or changes: drawn before the shadow pass.
 static void drawDynamicOpaque() {
     drawSignals();
@@ -930,24 +962,38 @@ static void drawDynamicOpaque() {
         const Vehicle& v = g_vehicles[i];
         float cx, cz, yaw;
         vehCenter(v, cx, cz, yaw);
-        if (fabsf(cx - g_camPos.x) > 280.0f || fabsf(cz - g_camPos.z) > 280.0f) continue;
+        if (!vehicleSeen(v)) continue;
         gPush();
         gTranslate(cx, 0, cz);
         gRotate(yaw * RAD2DEG, 0, 1, 0);
-        glCallList(v.list);
+        drawMesh(v.list);
         gPop();
     }
-    for (size_t i = 0; i < g_trains.size(); i++) drawTrain(g_trains[i]);
+    for (size_t i = 0; i < g_trains.size(); i++) drawTrainCulled(g_trains[i]);
     for (size_t i = 0; i < g_peds.size(); i++) {
         const Ped& p = g_peds[i];
-        if (fabsf(p.pos.x - g_camPos.x) > 160.0f || fabsf(p.pos.z - g_camPos.z) > 160.0f) continue;
+        if (!pedSeen(p)) continue;
         drawPerson(p);
     }
     for (size_t i = 0; i < g_gates.size(); i++)
-        if (!gateOpen(g_gates[i])) glCallList(g_gates[i].list);
-    for (size_t i = 0; i < g_friends.size(); i++) drawFriend(g_friends[i]);
-    drawKites();
+        if (!gateOpen(g_gates[i])) drawMesh(g_gates[i].list);
+    // the riders are posed once per frame into batches, drawn here and again for shadows
+    for (size_t i = 0; i < g_friends.size() && i < 5; i++) {
+        g_friendMesh[i].clear();
+        if (!g_friends[i].skater) continue;
+        if (len(g_friends[i].pos - g_camPos) > G().drawDist) continue;
+        recBegin();
+        drawFriend(g_friends[i]);
+        g_rec = false;
+        std::swap(g_friendMesh[i], g_recMesh);
+        compileMesh(g_friendMesh[i]);
+    }
+    recBegin();
     drawSkater();
+    g_rec = false;
+    std::swap(g_playerMesh, g_recMesh);
+    compileMesh(g_playerMesh);
+    drawKites();
 }
 
 // Marks the stencil wherever a shadow lands, then darkens those pixels once.
@@ -960,38 +1006,49 @@ static void drawShadowPass() {
     gLighting(false);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(-1.0f, -4.0f);
-    glCallList(g_worldShadowList);
+    if (G().worldShadows) drawChunks(g_shadowChunks, g_frustum, g_camPos, G().drawDist);
     pushShadowMatrix(0.0f);
-    for (size_t i = 0; i < g_vehicles.size(); i++) {
+    for (size_t i = 0; i < g_vehicles.size() && G().dynShadows >= 1; i++) {
         const Vehicle& v = g_vehicles[i];
         float cx, cz, yaw;
         vehCenter(v, cx, cz, yaw);
-        if (fabsf(cx - g_camPos.x) > 120.0f || fabsf(cz - g_camPos.z) > 120.0f) continue;
+        if (fabsf(cx - g_camPos.x) > 60.0f || fabsf(cz - g_camPos.z) > 60.0f) continue;
         glPushMatrix();
         glTranslatef(cx, 0, cz);
         glRotatef(yaw * RAD2DEG, 0, 1, 0);
-        glCallList(v.list);
+        drawMesh(v.list);
         glPopMatrix();
     }
-    for (size_t i = 0; i < g_trains.size(); i++) drawTrain(g_trains[i]);
+    for (size_t i = 0; i < g_trains.size() && G().dynShadows >= 1; i++) {
+        const Train& t = g_trains[i];
+        for (int c = 0; c < t.cars; c++) {
+            float front = t.x - (float)t.dir * (float)c * (TRAIN_CAR_L + TRAIN_GAP);
+            float xa = t.dir > 0 ? front - TRAIN_CAR_L : front;
+            if (fabsf(xa + TRAIN_CAR_L * 0.5f - g_camPos.x) > 80.0f || fabsf(t.z - g_camPos.z) > 80.0f) continue;
+            glPushMatrix();
+            glTranslatef(xa, 0, t.z);
+            drawMesh(t.carLists[c]);
+            glPopMatrix();
+        }
+    }
     glPopMatrix();
-    for (size_t i = 0; i < g_peds.size(); i++) {
+    for (size_t i = 0; i < g_peds.size() && G().dynShadows >= 2; i++) {
         const Ped& p = g_peds[i];
-        if (fabsf(p.pos.x - g_camPos.x) > 60.0f || fabsf(p.pos.z - g_camPos.z) > 60.0f) continue;
+        if (fabsf(p.pos.x - g_camPos.x) > 30.0f || fabsf(p.pos.z - g_camPos.z) > 30.0f) continue;
         pushShadowMatrix(p.pos.y);
         drawPerson(p);
         glPopMatrix();
     }
-    for (size_t i = 0; i < g_friends.size(); i++) {
+    for (size_t i = 0; i < g_friends.size() && G().dynShadows >= 1; i++) {
         const Friend& f = g_friends[i];
         if (!f.skater) continue;
         pushShadowMatrix(groundAt(f.pos.x, f.pos.z, f.pos.y + 0.1f).h);
-        drawFriend(f);
+        compileMesh(g_friendMesh[i]);
         glPopMatrix();
     }
     if (P.state != P_BAIL) {
         pushShadowMatrix(groundAt(P.pos.x, P.pos.z, P.pos.y + 0.1f).h);
-        drawSkater();
+        compileMesh(g_playerMesh);
         glPopMatrix();
     }
     glDisable(GL_POLYGON_OFFSET_FILL);
@@ -1064,6 +1121,7 @@ static void drawSky() {
 // Soft cumulus puffs painted into the sky, placed by compass direction so they
 // swing past as the camera turns.
 static void drawClouds() {
+    if (!G().clouds) return;
     float W = (float)g_winW, H = (float)g_winH;
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();

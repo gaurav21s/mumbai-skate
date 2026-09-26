@@ -24,6 +24,19 @@ The game opens on a title screen. W and S move through the menu, A and D change 
 | Landings, grind and manual balance | very forgiving | forgiving | strict |
 | Raju in the race | slow, waits for you | waits for you | flat out |
 
+### Graphics
+
+**Graphics** in the title and pause menus trades looks for heat and battery. The game only draws what the camera can see and never runs faster than its frame cap:
+
+| | Low | Medium (default) | High |
+|---|---|---|---|
+| Frame cap | 30 fps | 60 fps | 60 fps |
+| View distance | 130 m | 200 m | 290 m |
+| Sun shadows | only under your skater | city, you and traffic | everything, pedestrians too |
+| Anti-aliasing, clouds | off | on | on |
+
+Menus, the shop and the pause screen drop to 20 fps, and a minimised window stops drawing. If a laptop runs hot, pick Low. `./mumbai_skate --graphics low` sets it for one run, and `./mumbai_skate --bench` prints frame times for all three.
+
 The tutorial runs before chapter 1 on a new game. It has 17 short steps:
 
 - the basics: push, carve, brake, ollie, the charged pop

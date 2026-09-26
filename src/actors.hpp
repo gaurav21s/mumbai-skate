@@ -416,16 +416,6 @@ static void drawTrainCar(float xa, float xb, float zc, int livery, int cab, int 
     }
 }
 
-static void drawTrain(const Train& t) {
-    for (int i = 0; i < t.cars; i++) {
-        float front = t.x - (float)t.dir * (float)i * (TRAIN_CAR_L + TRAIN_GAP);
-        float xa = t.dir > 0 ? front - TRAIN_CAR_L : front;
-        gPush();
-        gTranslate(xa, 0, t.z);
-        glCallList(t.carLists[i]);
-        gPop();
-    }
-}
 
 static void bakeTrain(Train& t) {
     t.carLists.clear();
@@ -665,13 +655,13 @@ static void drawPerson(const Ped& p) {
     if (p.bumpT > 0) gRotate(sinf(p.bumpT * 20.0f) * 12.0f, 0, 0, 1);
     gScale(p.scale, p.scale, p.scale);
     if (p.moving) gTranslate(0, fabsf(cosf(p.phase)) * 0.03f, 0);
-    glCallList(p.body);
+    drawMesh(p.body);
     if (p.leg) {
         for (int s = -1; s <= 1; s += 2) {
             gPush();
             gTranslate((float)s * 0.09f, 0.86f, 0);
             gRotate(-(float)s * sw * RAD2DEG, 1, 0, 0);
-            glCallList(p.leg);
+            drawMesh(p.leg);
             gPop();
         }
     }
@@ -679,12 +669,12 @@ static void drawPerson(const Ped& p) {
     gPush();
     gTranslate(-0.23f, 1.37f, 0);
     gRotate(armL * RAD2DEG, 1, 0, 0);
-    glCallList(p.arm);
+    drawMesh(p.arm);
     gPop();
     gPush();
     gTranslate(0.23f, 1.37f, 0);
     gRotate(armR * RAD2DEG, 1, 0, 0);
-    glCallList(p.arm);
+    drawMesh(p.arm);
     gPop();
     gPop();
 }

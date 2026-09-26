@@ -126,7 +126,7 @@ static void drawRain(const V3& cam, float t) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
-    int n = (int)(1400.0f * g_rain);
+    int n = (int)(1400.0f * g_rain * G().rainMul);
     gBegin(GL_LINES);
     for (int i = 0; i < n; i++) {
         unsigned int h = (unsigned int)i * 2654435761u;

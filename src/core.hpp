@@ -5,10 +5,14 @@
 #  ifndef GL_SILENCE_DEPRECATION
 #    define GL_SILENCE_DEPRECATION
 #  endif
+#  include <OpenGL/OpenGL.h>
 #  include <OpenGL/gl.h>
 #  include <OpenGL/glu.h>
 #  include <GLUT/glut.h>
 #else
+#  ifndef GL_GLEXT_PROTOTYPES
+#    define GL_GLEXT_PROTOTYPES  // glGenBuffers and friends
+#  endif
 #  ifdef _WIN32
 #    include <windows.h>
 #  endif
@@ -24,6 +28,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <map>
 
 // ============================================================================
 // Math helpers
@@ -129,6 +134,12 @@ struct Mesh {
         uv.clear(); uc.clear();
         lv.clear(); lc.clear();
     }
+};
+
+struct Chunk {
+    GLuint list;
+    float lo[3], hi[3];
+    size_t verts;
 };
 
 struct Mat4 { float m[16]; };  // column-major, like OpenGL
@@ -288,17 +299,146 @@ static void recBegin() {
 }
 
 static size_t g_worldVerts = 0;
+static std::vector<Chunk> g_worldChunks;
+static void buildChunks(const Mesh& src, std::vector<Chunk>& out, float cell);
 
 // Stops recording and bakes what was captured into a display list.
+// ---------------------------------------------------------------- meshes on the GPU
+// Recorded meshes are uploaded once into a vertex buffer. Drawing them then
+// costs the CPU almost nothing, unlike display lists, which Apple's OpenGL
+// re-copies every frame.
+
+struct GpuMesh {
+    GLuint vbo;
+    GLsizei litN, unlitN, lineN;  // vertex counts per section
+    size_t unlitOff, lineOff;     // byte offsets of the later sections
+};
+static std::vector<GpuMesh> g_gpu;
+
+struct LitVert { float p[3], n[3]; unsigned char c[4]; };
+struct FlatVert { float p[3]; unsigned char c[4]; };
+
+// Uploads a mesh and returns a handle for drawMesh (0 means empty).
+static GLuint uploadMesh(const Mesh& m) {
+    GpuMesh g;
+    g.litN = (GLsizei)(m.tv.size() / 3);
+    g.unlitN = (GLsizei)(m.uv.size() / 3);
+    g.lineN = (GLsizei)(m.lv.size() / 3);
+    if (g.litN + g.unlitN + g.lineN == 0) return 0;
+    std::vector<unsigned char> buf;
+    buf.resize((size_t)g.litN * sizeof(LitVert) + (size_t)(g.unlitN + g.lineN) * sizeof(FlatVert));
+    unsigned char* w = buf.data();
+    for (GLsizei i = 0; i < g.litN; i++, w += sizeof(LitVert)) {
+        LitVert v;
+        memcpy(v.p, &m.tv[(size_t)i * 3], 12);
+        memcpy(v.n, &m.tn[(size_t)i * 3], 12);
+        memcpy(v.c, &m.tc[(size_t)i * 4], 4);
+        memcpy(w, &v, sizeof(v));
+    }
+    g.unlitOff = (size_t)(w - buf.data());
+    for (GLsizei i = 0; i < g.unlitN; i++, w += sizeof(FlatVert)) {
+        FlatVert v;
+        memcpy(v.p, &m.uv[(size_t)i * 3], 12);
+        memcpy(v.c, &m.uc[(size_t)i * 4], 4);
+        memcpy(w, &v, sizeof(v));
+    }
+    g.lineOff = (size_t)(w - buf.data());
+    for (GLsizei i = 0; i < g.lineN; i++, w += sizeof(FlatVert)) {
+        FlatVert v;
+        memcpy(v.p, &m.lv[(size_t)i * 3], 12);
+        memcpy(v.c, &m.lc[(size_t)i * 4], 4);
+        memcpy(w, &v, sizeof(v));
+    }
+    glGenBuffers(1, &g.vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)buf.size(), buf.data(), GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    g_gpu.push_back(g);
+    return (GLuint)g_gpu.size();
+}
+
+static void drawMesh(GLuint handle) {
+    if (handle == 0 || handle > g_gpu.size()) return;
+    const GpuMesh& g = g_gpu[handle - 1];
+    glBindBuffer(GL_ARRAY_BUFFER, g.vbo);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glEnableClientState(GL_COLOR_ARRAY);
+    if (g.litN) {
+        glEnableClientState(GL_NORMAL_ARRAY);
+        glVertexPointer(3, GL_FLOAT, sizeof(LitVert), (const void*)0);
+        glNormalPointer(GL_FLOAT, sizeof(LitVert), (const void*)12);
+        glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(LitVert), (const void*)24);
+        glDrawArrays(GL_TRIANGLES, 0, g.litN);
+        glDisableClientState(GL_NORMAL_ARRAY);
+    }
+    if (g.unlitN || g.lineN) {
+        GLboolean lit = glIsEnabled(GL_LIGHTING);
+        glDisable(GL_LIGHTING);
+        if (g.unlitN) {
+            glVertexPointer(3, GL_FLOAT, sizeof(FlatVert), (const void*)g.unlitOff);
+            glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(FlatVert), (const void*)(g.unlitOff + 12));
+            glDrawArrays(GL_TRIANGLES, 0, g.unlitN);
+        }
+        if (g.lineN) {
+            glVertexPointer(3, GL_FLOAT, sizeof(FlatVert), (const void*)g.lineOff);
+            glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(FlatVert), (const void*)(g.lineOff + 12));
+            glDrawArrays(GL_LINES, 0, g.lineN);
+        }
+        if (lit) glEnable(GL_LIGHTING);
+    }
+    glDisableClientState(GL_COLOR_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
 static GLuint recEnd() {
     g_rec = false;
     const Mesh& m = g_recMesh;
     g_worldVerts = (m.tv.size() + m.uv.size() + m.lv.size()) / 3;
-    GLuint id = glGenLists(1);
-    // client array state is not stored in display lists; glDrawArrays copies the data in
+    return uploadMesh(m);
+}
+
+// Stops recording and compiles what was captured as tiles (see buildChunks).
+static void recEndChunks(std::vector<Chunk>& out, float cell) {
+    g_rec = false;
+    g_worldVerts = (g_recMesh.tv.size() + g_recMesh.uv.size() + g_recMesh.lv.size()) / 3;
+    buildChunks(g_recMesh, out, cell);
+}
+
+// ---------------------------------------------------------------- chunked meshes
+// The city is split into square tiles, each compiled into its own display
+// list with a bounding box, so a frame only draws the tiles the camera can see.
+
+
+struct ChunkBucket {
+    Mesh m;
+    float lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f};
+    void grow(const float* p) {
+        for (int k = 0; k < 3; k++) {
+            lo[k] = std::min(lo[k], p[k]);
+            hi[k] = std::max(hi[k], p[k]);
+        }
+    }
+};
+
+// Tile key for a primitive: its centre's tile, or the shared "huge" bucket when
+// it spans more than a tile (the ground plane, the sea).
+static long chunkKey(const float* v, int n, float cell) {
+    float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
+    for (int i = 0; i < n; i++) {
+        x0 = std::min(x0, v[i * 3]);
+        x1 = std::max(x1, v[i * 3]);
+        z0 = std::min(z0, v[i * 3 + 2]);
+        z1 = std::max(z1, v[i * 3 + 2]);
+    }
+    if (x1 - x0 > cell * 1.5f || z1 - z0 > cell * 1.5f) return -1;
+    long ix = (long)floorf((x0 + x1) * 0.5f / cell) + 1000, iz = (long)floorf((z0 + z1) * 0.5f / cell) + 1000;
+    return ix * 100000L + iz;
+}
+
+static void compileMesh(const Mesh& m) {
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
-    glNewList(id, GL_COMPILE);
     if (!m.tv.empty()) {
         glEnableClientState(GL_NORMAL_ARRAY);
         glVertexPointer(3, GL_FLOAT, 0, m.tv.data());
@@ -321,10 +461,101 @@ static GLuint recEnd() {
         }
         glEnable(GL_LIGHTING);
     }
-    glEndList();
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);
-    return id;
+}
+
+// Splits a recorded mesh into tiles of size `cell` and compiles each one.
+static void buildChunks(const Mesh& src, std::vector<Chunk>& out, float cell) {
+    std::map<long, ChunkBucket> buckets;
+    size_t nt = src.tv.size() / 9;
+    for (size_t t = 0; t < nt; t++) {
+        ChunkBucket& b = buckets[chunkKey(&src.tv[t * 9], 3, cell)];
+        for (int v = 0; v < 3; v++) {
+            const float* p = &src.tv[t * 9 + v * 3];
+            b.grow(p);
+            b.m.tv.insert(b.m.tv.end(), p, p + 3);
+            b.m.tn.insert(b.m.tn.end(), &src.tn[t * 9 + v * 3], &src.tn[t * 9 + v * 3] + 3);
+            b.m.tc.insert(b.m.tc.end(), &src.tc[(t * 3 + v) * 4], &src.tc[(t * 3 + v) * 4] + 4);
+        }
+    }
+    size_t nu = src.uv.size() / 9;
+    for (size_t t = 0; t < nu; t++) {
+        ChunkBucket& b = buckets[chunkKey(&src.uv[t * 9], 3, cell)];
+        for (int v = 0; v < 3; v++) {
+            const float* p = &src.uv[t * 9 + v * 3];
+            b.grow(p);
+            b.m.uv.insert(b.m.uv.end(), p, p + 3);
+            b.m.uc.insert(b.m.uc.end(), &src.uc[(t * 3 + v) * 4], &src.uc[(t * 3 + v) * 4] + 4);
+        }
+    }
+    size_t nl = src.lv.size() / 6;
+    for (size_t l = 0; l < nl; l++) {
+        ChunkBucket& b = buckets[chunkKey(&src.lv[l * 6], 2, cell)];
+        for (int v = 0; v < 2; v++) {
+            const float* p = &src.lv[l * 6 + v * 3];
+            b.grow(p);
+            b.m.lv.insert(b.m.lv.end(), p, p + 3);
+            b.m.lc.insert(b.m.lc.end(), &src.lc[(l * 2 + v) * 4], &src.lc[(l * 2 + v) * 4] + 4);
+        }
+    }
+    for (auto& kv : buckets) {
+        const ChunkBucket& b = kv.second;
+        Chunk c;
+        for (int k = 0; k < 3; k++) {
+            c.lo[k] = b.lo[k];
+            c.hi[k] = b.hi[k];
+        }
+        c.verts = (b.m.tv.size() + b.m.uv.size() + b.m.lv.size()) / 3;
+        c.list = uploadMesh(b.m);
+        out.push_back(c);
+    }
+}
+
+// The six clip planes of the current projection and modelview, for culling.
+struct Frustum {
+    float p[6][4];
+};
+static Frustum currentFrustum() {
+    GLfloat pm[16], mv[16], m[16];
+    glGetFloatv(GL_PROJECTION_MATRIX, pm);
+    glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++) {
+            float s = 0;
+            for (int k = 0; k < 4; k++) s += pm[k * 4 + r] * mv[c * 4 + k];
+            m[c * 4 + r] = s;
+        }
+    Frustum f;
+    for (int i = 0; i < 3; i++)
+        for (int sgn = 0; sgn < 2; sgn++) {
+            float* pl = f.p[i * 2 + sgn];
+            float s = sgn ? -1.0f : 1.0f;
+            for (int c = 0; c < 4; c++) pl[c] = m[c * 4 + 3] + s * m[c * 4 + i];
+        }
+    return f;
+}
+static bool boxVisible(const Frustum& f, const float lo[3], const float hi[3]) {
+    for (int i = 0; i < 6; i++) {
+        const float* pl = f.p[i];
+        float x = pl[0] >= 0 ? hi[0] : lo[0], y = pl[1] >= 0 ? hi[1] : lo[1], z = pl[2] >= 0 ? hi[2] : lo[2];
+        if (pl[0] * x + pl[1] * y + pl[2] * z + pl[3] < 0) return false;
+    }
+    return true;
+}
+
+static size_t g_drawnVerts = 0;
+// Draws the tiles inside the view and nearer than maxDist to the eye.
+static void drawChunks(const std::vector<Chunk>& chunks, const Frustum& f, const V3& eye, float maxDist) {
+    for (size_t i = 0; i < chunks.size(); i++) {
+        const Chunk& c = chunks[i];
+        float dx = std::max(std::max(c.lo[0] - eye.x, 0.0f), eye.x - c.hi[0]);
+        float dz = std::max(std::max(c.lo[2] - eye.z, 0.0f), eye.z - c.hi[2]);
+        if (dx * dx + dz * dz > maxDist * maxDist) continue;
+        if (!boxVisible(f, c.lo, c.hi)) continue;
+        drawMesh(c.list);
+        g_drawnVerts += c.verts;
+    }
 }
 
 // ============================================================================
@@ -608,10 +839,13 @@ static int bmpWidth(const char* s, void* font = GLUT_BITMAP_HELVETICA_18) {
     for (; *s; s++) w += glutBitmapWidth(font, *s);
     return w;
 }
-// Bitmap text with a dark drop shadow so it reads over any background.
+// Bitmap text. The large size gets a drop shadow; small text always sits on a
+// dark panel, and skipping its shadow halves the number of bitmap draws.
 static void bmpTextShadow(float x, float y, const char* s, const Col& c, void* font = GLUT_BITMAP_HELVETICA_18) {
-    glColor4f(0, 0, 0, 0.8f);
-    bmpText(x + 1, y - 1, s, font);
+    if (font == GLUT_BITMAP_HELVETICA_18) {
+        glColor4f(0, 0, 0, 0.8f);
+        bmpText(x + 1, y - 1, s, font);
+    }
     glColor4f(c.r, c.g, c.b, 1);
     bmpText(x, y, s, font);
 }
