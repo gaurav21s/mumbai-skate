@@ -2,6 +2,27 @@
 
 A 3D skateboarding game set on one Mumbai block: BEST buses, auto rickshaws, local trains on the viaduct, chai and vada pav stalls, chawls with laundry on the balconies, and a plaza built for skating. It is written in C++ with OpenGL and GLUT. There are no asset files, so it runs as soon as it compiles.
 
+![The Sea Face show on the last night of the story](docs/screenshots/sea-face-show.png)
+
+## Highlights
+
+| | |
+|---|---|
+| ![Opening film: the first local of the day at dawn](docs/screenshots/opening.png) | ![Ending film: the crew and fireworks at the Sea Face](docs/screenshots/ending.png) |
+| The opening film, dawn over Dadar | The ending film, the whole crew on the Sea Face |
+| ![The main road at night with a lit BEST bus](docs/screenshots/night-road.png) | ![The plaza at sunset](docs/screenshots/sunset.png) |
+| Night on the main road: lit buses, headlights, street lamps | Sunset in the plaza under the railway bridge |
+
+![A chapter in progress in daylight](docs/screenshots/daytime.png)
+
+- Six chapters and 47 story tasks. Tricks, gaps and areas open as you go.
+- Five friends with their own missions. In the finale they all ride with you.
+- A day that runs from dawn to night, with lit windows, headlights, stars and a moon.
+- Food deliveries, a job board, a skate shop with decks, clothes and accessories, energy and a boost.
+- Easy, Medium and Hard, a 17-step tutorial, hints and a paid skip for stuck tasks.
+- Low, Medium and High graphics, with a frame cap, so a laptop stays cool.
+- Everything is drawn in code. There are no image, model or sound files.
+
 ## Build and run
 
 ```bash
@@ -13,7 +34,7 @@ The first build needs Xcode's command line tools on macOS, or freeglut on Linux.
 
 ## Title screen, difficulty and tutorial
 
-The game opens on a title screen. W and S move through the menu, A and D change a setting, and Enter selects. From here you can continue or start, pick a difficulty, switch the tutorial on or off, or start a new game (Enter twice, because it erases the save). P or Esc opens the same settings mid-game.
+The game opens on a title screen. W and S move through the menu, A and D change a setting, and Enter selects. From here you can continue or start, pick a difficulty, graphics and time of day, switch the tutorial on or off, or start a new game (Enter twice, because it erases the save). P or Esc opens the same settings mid-game.
 
 | | Easy | Medium | Hard |
 |---|---|---|---|
@@ -37,6 +58,16 @@ The game opens on a title screen. W and S move through the menu, A and D change 
 
 Menus, the shop and the pause screen drop to 20 fps, and a minimised window stops drawing. If a laptop runs hot, pick Low. `./mumbai_skate --graphics low` sets it for one run, and `./mumbai_skate --bench` prints frame times for all three.
 
+### Time of day
+
+A clock in the top right corner runs while you skate. One game hour takes 90 seconds, so the light changes during a chapter: golden hour around 5 PM, sunset near 6:30, then night. After dark the windows, shops, signboards and street lamps light up, buses show their tube lights and route boards, and traffic runs with headlights. Local trains go past with lit windows, and the Sea Link has lights along its deck.
+
+Each chapter starts at its own hour, from 8:30 AM for chapter 1 to 9 PM for the finale. When you finish a chapter the sky fast-forwards to the next one behind the card. **Time of day** in the title and pause menus can also fix it at day, evening or night.
+
+### Opening and ending films
+
+A new game opens with a short film: dawn over Dadar, the first local train, the buses and chai stalls, the plaza, and then you, the new kid with a hundred rupees. Finishing the finale plays the ending: the crew and the crowd on the Sea Face at night, fireworks over the sea, and the credits. Both use camera moves over the live city. Space, Enter or Esc skips.
+
 The tutorial runs before chapter 1 on a new game. It has 17 short steps:
 
 - the basics: push, carve, brake, ollie, the charged pop
@@ -49,7 +80,7 @@ Each step says what the move is and which keys to press, and waits until you lan
 
 ## How the game is laid out
 
-The story has six chapters and 30 tasks. Every chapter opens something new, so tricks are earned rather than handed out.
+The story has six chapters and 47 tasks. Every chapter opens something new, so tricks are earned rather than handed out.
 
 | Chapter | Where | What you unlock when it's done |
 |---|---|---|
@@ -57,10 +88,23 @@ The story has six chapters and 30 tasks. Every chapter opens something new, so t
 | 2. Seedhi Pe Chadh | the garden stairs | indy and melon grabs, the construction site |
 | 3. Site Pe Session | the construction site | manuals, the skywalk, the C-H-A-I letters |
 | 4. Skywalk Pe Chai | the skywalk | chai power and the Bombay Backflip |
-| 5. Traffic Ka Raja | the road kicker, over the traffic | the kaali-peeli deck, the monsoon |
-| 6. Baarish Session | everywhere, in the rain, against a clock | the gold deck and free skate |
+| 5. Traffic Ka Raja | the road kicker, over the traffic | the kaali-peeli deck, the finale |
+| 6. Baarish Ki Raat | a night tour of the whole block with the crew, ending at the Sea Face | the gold deck and free skate |
 
 Tasks mix tricks with the rest of the block. For example, chapter 2 asks for five heelflips and two food deliveries, and chapter 5 wants a jump over a BEST bus. A green beam marks any task that happens in one place, and the arrow at the top of the screen points to the nearest one.
+
+### The finale
+
+Chapter 6 is one monsoon night with everyone. It has no clock. It plays as six stops, each with three or four short tasks, and each stop opens when the one before it is done:
+
+1. Raju in the plaza: a kickflip and the yellow bar
+2. Priya at the garden: two heelflips and the stair gap
+3. Sam at the construction site: a grab and the concrete pipe, for his camera
+4. Chai for the crew, taken to Tukaram at Dadar station. The rain stops here
+5. The main road: a median hop, a spin and a small combo while the street watches
+6. The Sea Face show: the seawall, the steps and a Bombay Backflip
+
+Once you meet a friend, they ride beside you for the rest of the night. For the last stop, festival lights and lanterns go up along the lane and the promenade, a crowd gathers round the viewing deck and cheers your combos, Tukaram comes to watch, and fireworks go off over the sea. Your chai power stays full, so the backflip is always ready. Each stop pays RS 150.
 
 ### The Sea Face
 
@@ -157,7 +201,7 @@ From chapter 5 on (from the start on Easy), a meter under your score fills as yo
 | E / Q | talk and accept / decline or give up a mission |
 | T | skip a tutorial step |
 | C, R, H | camera, respawn, hide help |
-| P or Esc | menu (difficulty, tutorial, quit) |
+| P or Esc | menu (difficulty, graphics, time of day, tutorial, quit) |
 
 To link tricks into one combo, land and then keep moving within the short window. A powerslide, a manual or another ollie all count.
 
@@ -165,4 +209,4 @@ To link tricks into one combo, land and then keep moving within the short window
 
 `make test` runs `./mumbai_skate --selftest`. It is a set of scripted runs through the real physics, career and mission code. It checks ollie heights, the kicker gap, clearing a bus off the road kicker, barricades, locked tricks, chapter completion, a full delivery, both outcomes of Raju's race, the difficulty scaling, the tutorial, and a save file round trip.
 
-`--level N` starts with N chapters finished. It never touches your save.
+`--level N` starts with N chapters finished, and `--level 5 --stop 6` jumps to a stop of the finale. `--time 21.5` starts the clock at an hour. `--cutscene intro` plays the opening film, and `--level 6 --cutscene ending` the ending. None of them touch your save.

@@ -22,6 +22,7 @@ struct Vehicle {
     GLuint list;
     bool turning;     // cross-road U-turn in progress
     float turnA;      // 0..PI around the U-turn
+    GLuint glow;      // headlights and lit windows, drawn after dark
 };
 
 struct Lane {
@@ -55,6 +56,7 @@ struct Train {
     int cars;
     int livery;
     std::vector<GLuint> carLists;
+    std::vector<GLuint> carGlow;  // lit windows and headlights
 };
 static std::vector<Train> g_trains;
 static const float TRAIN_CAR_L = 19.5f;
@@ -326,6 +328,64 @@ static void drawTaxi(float spin) {
     for (int i = -1; i <= 1; i++) box(-0.6f, 1.48f, (float)i * 0.3f - 0.02f, 0.6f, 1.53f, (float)i * 0.3f + 0.02f);
 }
 
+// Headlights, tail lights, lit bus windows and the beam on the road.
+// Recorded into the glow mesh right after the vehicle itself.
+static void drawVehicleGlow(const Vehicle& v) {
+    SavedColor keep;
+    glowBegin();
+    const Col head = C(1.0f, 0.95f, 0.8f), bloom = C(0.35f, 0.33f, 0.26f), tail = C(0.9f, 0.1f, 0.06f);
+    const Col beam = C(0.3f, 0.28f, 0.22f);
+    if (v.type == VEH_BUS || v.type == VEH_DOUBLE) {
+        const float L = 11.0f, W = 2.5f;
+        bool dbl = v.type == VEH_DOUBLE;
+        for (int s = -1; s <= 1; s += 2) {
+            float x = (float)s * (W / 2 - 0.3f);
+            glowQuadZ(x - 0.15f, 0.65f, x + 0.15f, 0.85f, L / 2 + 0.02f, head, head);
+            glowQuadZ(x - 0.35f, 0.5f, x + 0.35f, 1.0f, L / 2 + 0.025f, bloom, bloom);
+            glowQuadZ(x - 0.15f, 0.65f, x + 0.15f, 0.85f, -L / 2 - 0.02f, tail, tail);
+        }
+        // tube lights inside: every window glows
+        Col tube = C(0.58f, 0.7f, 0.6f);
+        for (int deck = 0; deck < (dbl ? 2 : 1); deck++) {
+            float y0 = deck == 0 ? 1.45f : 2.8f, y1 = y0 + 0.9f;
+            for (float z = -L / 2 + 0.6f; z < L / 2 - 1.4f; z += 1.25f)
+                for (int s = -1; s <= 1; s += 2) {
+                    gBegin(GL_QUADS);
+                    setc(mulc(tube, 0.7f));
+                    gVertex((float)s * (W / 2 + 0.018f), y0, z); gVertex((float)s * (W / 2 + 0.018f), y0, z + 1.0f);
+                    setc(tube);
+                    gVertex((float)s * (W / 2 + 0.018f), y1, z + 1.0f); gVertex((float)s * (W / 2 + 0.018f), y1, z);
+                    gEnd();
+                }
+        }
+        glowQuadZ(-W / 2 + 0.1f, 1.35f, W / 2 - 0.1f, 2.45f, L / 2 + 0.016f, mulc(tube, 0.25f), mulc(tube, 0.4f));
+        // the orange route board
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d DADAR", v.route);
+        gPush();
+        gTranslate(0, 2.64f, L / 2 + 0.025f);
+        text3DFit(buf, 0.24f, W - 0.5f, C(1.0f, 0.55f, 0.1f));
+        gPop();
+        glowSpill(W / 2, W / 2 + 2.0f, L / 2 + 0.1f, L / 2 + 12.0f, 0.03f, beam);
+    } else if (v.type == VEH_AUTO) {
+        glowQuadZ(-0.1f, 0.8f, 0.1f, 0.95f, 1.32f, head, head);
+        glowQuadZ(-0.25f, 0.7f, 0.25f, 1.05f, 1.325f, bloom, bloom);
+        glowQuadZ(-0.55f, 0.5f, -0.4f, 0.62f, -1.42f, tail, tail);
+        glowQuadZ(0.4f, 0.5f, 0.55f, 0.62f, -1.42f, tail, tail);
+        glowSpill(0.4f, 1.8f, 1.4f, 8.0f, 0.03f, mulc(beam, 0.8f));
+    } else {
+        float L = v.type == VEH_TAXI ? 3.9f : 4.2f, W = v.type == VEH_TAXI ? 1.55f : 1.75f;
+        for (int s = -1; s <= 1; s += 2) {
+            float x = (float)s * (W / 2 - 0.22f);
+            glowQuadZ(x - 0.13f, 0.6f, x + 0.13f, 0.78f, L / 2 + 0.015f, head, head);
+            glowQuadZ(x - 0.3f, 0.5f, x + 0.3f, 0.9f, L / 2 + 0.02f, bloom, bloom);
+            glowQuadZ(x - 0.13f, 0.6f, x + 0.13f, 0.78f, -L / 2 - 0.015f, tail, tail);
+        }
+        glowSpill(W / 2, W / 2 + 1.8f, L / 2 + 0.1f, L / 2 + 10.0f, 0.03f, beam);
+    }
+    glowEnd();
+}
+
 static void drawVehicleMesh(const Vehicle& v) {
     switch (v.type) {
         case VEH_BUS: drawBus(false, v.route, v.wheelSpin); break;
@@ -383,6 +443,20 @@ static void drawTrainCar(float xa, float xb, float zc, int livery, int cab, int 
             for (int d = 0; d < 3; d++) if (fabsf(x + 0.5f - doors[d]) < 1.3f) nearDoor = true;
             if (!nearDoor) rectZ(x, yb + 2.0f, x + 1.0f, yb + 2.95f, 0);
         }
+        {
+            // tube lights inside, for after dark
+            SavedColor keep;
+            glowBegin();
+            Col tube = C(0.6f, 0.72f, 0.64f);
+            for (float x = xa + 0.8f; x < xb - 1.0f; x += 1.55f) {
+                bool nearDoor = false;
+                for (int d = 0; d < 3; d++) if (fabsf(x + 0.5f - doors[d]) < 1.3f) nearDoor = true;
+                if (!nearDoor) glowQuadZ(x, yb + 2.0f, x + 1.0f, yb + 2.95f, 0.004f * (float)s, mulc(tube, 0.75f), tube);
+            }
+            for (int d = 0; d < 3; d++)
+                glowQuadZ(doors[d] - 0.65f, yb + 0.65f, doors[d] + 0.65f, yb + 3.2f, 0.004f * (float)s, mulc(tube, 0.2f), mulc(tube, 0.45f));
+            glowEnd();
+        }
         setc(0.05f, 0.05f, 0.06f);
         for (int d = 0; d < 3; d++) rectZ(doors[d] - 0.65f, yb + 0.65f, doors[d] + 0.65f, yb + 3.2f, 0.001f * s);
         gPop();
@@ -404,6 +478,10 @@ static void drawTrainCar(float xa, float xb, float zc, int livery, int cab, int 
         setc(1, 1, 0.85f);
         rectX(z0 + 0.3f, yb + 0.9f, z0 + 0.7f, yb + 1.2f, 0.001f * cab);
         rectX(z1 - 0.7f, yb + 0.9f, z1 - 0.3f, yb + 1.2f, 0.001f * cab);
+        glowBegin();
+        rectX(z0 + 0.2f, yb + 0.8f, z0 + 0.8f, yb + 1.3f, 0.003f * cab);
+        rectX(z1 - 0.8f, yb + 0.8f, z1 - 0.2f, yb + 1.3f, 0.003f * cab);
+        glowEnd();
         gLighting(true);
         gPop();
     }
@@ -419,6 +497,7 @@ static void drawTrainCar(float xa, float xb, float zc, int livery, int cab, int 
 
 static void bakeTrain(Train& t) {
     t.carLists.clear();
+    t.carGlow.clear();
     for (int i = 0; i < t.cars; i++) {
         int cab = 0;
         if (i == 0) cab = t.dir;
@@ -426,6 +505,7 @@ static void bakeTrain(Train& t) {
         recBegin();
         drawTrainCar(0, TRAIN_CAR_L, 0, t.livery, cab, i + t.livery * 11);
         t.carLists.push_back(recEnd());
+        t.carGlow.push_back(recEndGlow());
     }
 }
 

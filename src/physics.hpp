@@ -132,7 +132,7 @@ static float moveHoriz(float dt, float step) {
     }
     for (size_t i = 0; i < g_friends.size(); i++) {
         Friend& f = g_friends[i];
-        if (!f.skater || fabsf(f.pos.y - P.pos.y) > 1.2f) continue;
+        if (!f.skater || f.follow || fabsf(f.pos.y - P.pos.y) > 1.2f) continue;  // the crew riding along gives way
         float dx = P.pos.x - f.pos.x, dz = P.pos.z - f.pos.z;
         float d2 = dx * dx + dz * dz;
         const float R = 0.6f;

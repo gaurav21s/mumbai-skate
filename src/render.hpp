@@ -9,6 +9,7 @@ static int g_winW = 1280, g_winH = 720;
 static Frustum g_frustum;  // of the current frame, for culling
 static Mesh g_playerMesh, g_friendMesh[5];  // riders posed this frame, in world space
 static float g_time = 0;
+static int g_cut = 0;  // cutscene playing (CutKind in cutscene.hpp), 0 for none
 static bool g_showHelp = true;
 static int g_camMode = 0;
 static V3 g_camPos, g_camLook;
@@ -386,6 +387,7 @@ static void drawRider(float footY, float crouch, int pose) {
 
 static void drawCarried();
 static void drawClouds();
+static void drawStars();
 static float g_tiltP = 0, g_tiltR = 0;  // board pitch and roll following the surface, degrees
 
 // How steep the surface under the skater is, along and across the board.
@@ -661,7 +663,7 @@ static void drawTalkMarkers() {
     float bob = sinf(g_time * 3.0f) * 0.12f;
     for (size_t i = 0; i < g_friends.size(); i++) {
         const Friend& f = g_friends[i];
-        if (f.racing) continue;
+        if (f.racing || f.follow || g_cut) continue;  // no labels on the crew riding with you, or in the films
         V3 top = f.pos + V3(0, 2.25f + bob, 0);
         bool open = g_unlockLevel >= f.needLevel;
         if (g_friend[f.id]) {
@@ -759,7 +761,7 @@ static void drawObjectives() {
     if (c && !g_mis.on)
         for (size_t i = 0; i < c->goals.size(); i++) {
             const Goal& g = c->goals[i];
-            if (goalDone(g) || !g.hasAt) continue;
+            if (!goalOpen(g) || !g.hasAt) continue;
             float gy = groundAt(g.at.x, g.at.z, g.at.y + 0.5f).h;
             beam(V3(g.at.x, gy, g.at.z), C(0.3f, 1.0f, 0.5f), 0.35f, 30.0f, 0.16f);
         }
@@ -1067,7 +1069,7 @@ static void drawShadowPass() {
     glDisable(GL_FOG);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColor4f(0.05f, 0.06f, 0.14f, 0.34f * (1.0f - 0.7f * g_rain));
+    glColor4f(0.05f, 0.06f, 0.14f, 0.34f * g_sky.shadow);
     glBegin(GL_QUADS);
     glVertex2f(0, 0); glVertex2f(1, 0); glVertex2f(1, 1); glVertex2f(0, 1);
     glEnd();
@@ -1106,16 +1108,53 @@ static void drawSky() {
     gLighting(false);
     glDisable(GL_FOG);
     gBegin(GL_QUADS);
-    Col a = mixc(C(0.93f, 0.84f, 0.7f), C(0.5f, 0.54f, 0.58f), g_rain);
-    Col b = mixc(C(0.9f, 0.83f, 0.72f), C(0.52f, 0.56f, 0.6f), g_rain);
-    Col c = mixc(C(0.4f, 0.62f, 0.86f), C(0.36f, 0.4f, 0.46f), g_rain);
+    const Col& a = g_sky.low;
+    const Col& b = g_sky.mid;
+    const Col& c = g_sky.top;
     gColor(a.r, a.g, a.b); glVertex2f(0, 0); glVertex2f(1, 0);
     gColor(b.r, b.g, b.b); glVertex2f(1, 0.45f); glVertex2f(0, 0.45f);
     gColor(b.r, b.g, b.b); glVertex2f(0, 0.45f); glVertex2f(1, 0.45f);
     gColor(c.r, c.g, c.b); glVertex2f(1, 1); glVertex2f(0, 1);
     gEnd();
+    drawStars();
     drawClouds();
     glEnable(GL_DEPTH_TEST);
+}
+
+// Stars, placed by compass direction like the clouds, twinkling a little.
+static void drawStars() {
+    if (g_sky.stars < 0.02f) return;
+    float W = (float)g_winW, H = (float)g_winH;
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, W, 0, H, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    float aspect = W / std::max(1.0f, H);
+    float fovX = 2.0f * atanf(tanf(64.0f * 0.5f / RAD2DEG) * aspect);
+    for (int big = 0; big < 2; big++) {
+        glPointSize(big ? 2.5f : 1.5f);
+        glBegin(GL_POINTS);
+        for (int i = 0; i < 260; i++) {
+            unsigned int h = (unsigned int)(i + 7) * 2246822519u;
+            h ^= h >> 13;
+            h *= 3266489917u;
+            if (((h >> 3) % 9 == 0) != (big == 1)) continue;
+            float az = (float)(h & 4095) / 4095.0f * TWO_PI;
+            float el = 0.5f + (float)((h >> 12) & 1023) / 1023.0f * 0.5f;
+            float rel = wrapAngle(az - g_camYaw);
+            if (fabsf(rel) > fovX * 0.5f + 0.1f) continue;
+            float tw = 0.65f + 0.35f * sinf(g_time * (1.5f + (float)(h >> 24) * 0.02f) + (float)i);
+            float warm = (float)((h >> 22) & 3) * 0.05f;
+            glColor4f(0.9f + warm, 0.9f, 1.0f - warm, g_sky.stars * tw * (0.4f + 0.6f * el));
+            glVertex2f(W * (0.5f - rel / fovX), H * el);
+        }
+        glEnd();
+    }
+    glPointSize(1.0f);
+    glDisable(GL_BLEND);
 }
 
 // Soft cumulus puffs painted into the sky, placed by compass direction so they
@@ -1140,13 +1179,15 @@ static void drawClouds() {
         float rel = wrapAngle(az - g_camYaw);
         if (fabsf(rel) > fovX * 0.5f + 0.4f) continue;
         float cx = W * (0.5f - rel / fovX), cy = H * el;
-        Col c = mixc(C(1.0f, 0.98f, 0.95f), C(0.62f, 0.65f, 0.7f), g_rain);
+        // lit from below at sunset, dark shapes at night
+        Col c = mixc(C(1.0f, 0.98f, 0.95f), mulc(g_sky.low, 1.1f), clampf(g_sky.night * 1.6f, 0, 0.85f));
+        c = mixc(c, mulc(C(0.62f, 0.65f, 0.7f), 0.2f + 0.8f * (1.0f - g_sky.night)), g_rain);
         for (int k = 0; k < 6; k++) {
             float ox = ((float)k - 2.5f) * size * 0.45f;
             float oy = sinf((float)k * 1.7f + (float)i) * size * 0.12f;
             float r = size * (0.45f + 0.25f * sinf((float)k * 2.3f + (float)i * 0.7f));
             glBegin(GL_TRIANGLE_FAN);
-            glColor4f(c.r, c.g, c.b, 0.55f);
+            glColor4f(c.r, c.g, c.b, 0.55f * (1.0f - 0.45f * g_sky.night));
             glVertex2f(cx + ox, cy + oy);
             glColor4f(c.r, c.g, c.b, 0.0f);
             for (int a = 0; a <= 20; a++) {
@@ -1159,30 +1200,40 @@ static void drawClouds() {
     glDisable(GL_BLEND);
 }
 
+static const V3 MOON_DIR(0.5f, 0.42f, 0.76f);
+
+// Sun by day, moon by night. The sun keeps its direction (shadows are baked
+// for it) but grows and turns orange toward sunset.
 static void drawSun() {
-    V3 s = g_camPos + SUN_DIR * 400.0f;
-    V3 toCam = norm(g_camPos - s);
-    V3 up(0, 1, 0);
-    V3 r = norm(cross(up, toCam));
-    V3 u = cross(toCam, r);
     gLighting(false);
     glDisable(GL_FOG);
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    for (int layer = 0; layer < 3; layer++) {
-        float rad = layer == 0 ? 40.0f : (layer == 1 ? 22.0f : 12.0f);
-        float a = layer == 0 ? 0.12f : (layer == 1 ? 0.25f : 1.0f);
-        gBegin(GL_TRIANGLE_FAN);
-        glColor4f(1.0f, 0.95f, 0.8f, a);
-        gVertex(s.x, s.y, s.z);
-        glColor4f(1.0f, 0.85f, 0.6f, layer == 2 ? 1.0f : 0.0f);
-        for (int i = 0; i <= 24; i++) {
-            float t = TWO_PI * (float)i / 24.0f;
-            V3 p = s + r * (cosf(t) * rad) + u * (sinf(t) * rad);
-            gVertex(p.x, p.y, p.z);
+    for (int body = 0; body < 2; body++) {
+        float vis = body == 0 ? g_sky.sunA : g_sky.moon;
+        if (vis < 0.01f) continue;
+        V3 s = g_camPos + (body == 0 ? SUN_DIR : norm(MOON_DIR)) * 400.0f;
+        V3 toCam = norm(g_camPos - s);
+        V3 r = norm(cross(V3(0, 1, 0), toCam));
+        V3 u = cross(toCam, r);
+        Col core = body == 0 ? g_sky.sunDisc : C(0.95f, 0.95f, 0.88f);
+        float grow = body == 0 ? 1.0f + 0.5f * clampf(g_sky.night * 2.5f, 0, 1) : 0.7f;
+        for (int layer = 0; layer < 3; layer++) {
+            float rad = (layer == 0 ? 40.0f : (layer == 1 ? 22.0f : 12.0f)) * grow;
+            float a = (layer == 0 ? 0.12f : (layer == 1 ? 0.25f : 1.0f)) * vis;
+            if (body == 1 && layer < 2) a *= 0.5f;
+            gBegin(GL_TRIANGLE_FAN);
+            glColor4f(core.r, core.g, core.b, a);
+            gVertex(s.x, s.y, s.z);
+            glColor4f(core.r, core.g * 0.9f, core.b * 0.75f, layer == 2 ? a : 0.0f);
+            for (int i = 0; i <= 24; i++) {
+                float t = TWO_PI * (float)i / 24.0f;
+                V3 p = s + r * (cosf(t) * rad) + u * (sinf(t) * rad);
+                gVertex(p.x, p.y, p.z);
+            }
+            gEnd();
         }
-        gEnd();
     }
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);

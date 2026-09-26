@@ -16,6 +16,39 @@
 static const float SIDEWALK_H = 0.18f;
 static const float WORLD_MIN_X = -141.0f, WORLD_MAX_X = 141.0f;
 
+// ---------------------------------------------------------------- night lights
+// These only record into the glow mesh (see glowBegin in core.hpp), so they
+// cost nothing in daylight and never change the city's random layout.
+
+static const Col WINDOW_LIGHTS[4] = {{0.95f, 0.66f, 0.3f}, {0.92f, 0.76f, 0.46f}, {0.6f, 0.78f, 0.9f}, {0.85f, 0.5f, 0.28f}};
+
+// Some windows light up after dark: warm bulbs, a few cool tube lights.
+static void glowWindowZ(float x0, float y0, float x1, float y1, float z, float chance) {
+    if (glowRand() >= chance) return;
+    SavedColor keep;
+    Col c = mulc(WINDOW_LIGHTS[(int)(glowRand() * 3.99f)], 0.5f + 0.35f * glowRand());
+    glowBegin();
+    glowQuadZ(x0, y0, x1, y1, z, mulc(c, 0.65f), c);
+    glowEnd();
+}
+
+// An open shop at night: lit back wall, a tube light and light spilling out.
+static void glowShopFront(float a, float b, float gh) {
+    SavedColor keep;
+    Col warm = glowRand() < 0.35f ? C(0.55f, 0.62f, 0.62f) : C(0.62f, 0.5f, 0.3f);
+    glowBegin();
+    glowQuadZ(a, 0.2f, b, gh - 0.2f, -1.57f, mulc(warm, 0.35f), mulc(warm, 0.6f));
+    glowQuadZ(a + 0.3f, gh - 0.9f, b - 0.3f, gh - 0.82f, -1.45f, C(0.9f, 0.95f, 0.95f), C(0.9f, 0.95f, 0.95f));
+    glowQuadZ(a, 0.3f, b, gh - 0.9f, -0.95f, mulc(warm, 0.12f), mulc(warm, 0.2f));
+    gBegin(GL_QUADS);
+    setc(mulc(warm, 0.5f));
+    gVertex(a, SIDEWALK_H + 0.012f, -1.55f); gVertex(b, SIDEWALK_H + 0.012f, -1.55f);
+    setc(0, 0, 0);
+    gVertex(b + 0.6f, SIDEWALK_H + 0.012f, 2.4f); gVertex(a - 0.6f, SIDEWALK_H + 0.012f, 2.4f);
+    gEnd();
+    glowEnd();
+}
+
 // Painted kerb: alternating black and yellow blocks on a vertical face.
 static void kerbStripeZ(float x0, float x1, float z, float h) {
     int i = 0;
@@ -151,7 +184,7 @@ static void buildMedian() {
 
 // Street light. `out` points from the pole toward the road (+1 = +z, -1 = -z)
 // when alongX, otherwise along x.
-struct PolePt { V3 top; };
+struct PolePt { V3 top, tip; };
 static std::vector<PolePt> g_poleTops;
 
 static void streetLight(float x, float z, bool alongX, float out) {
@@ -169,9 +202,14 @@ static void streetLight(float x, float z, bool alongX, float out) {
     gLighting(false);
     setc(1.0f, 0.95f, 0.75f);
     rectY(tip.x - 0.2f, tip.z - 0.2f, tip.x + 0.2f, tip.z + 0.2f, tip.y - 0.21f);
+    glowBegin();
+    setc(1.0f, 0.82f, 0.5f);
+    rectY(tip.x - 0.22f, tip.z - 0.22f, tip.x + 0.22f, tip.z + 0.22f, tip.y - 0.215f);
+    glowEnd();
     gLighting(true);
     PolePt p;
     p.top = V3(x, y0 + 7.2f, z);
+    p.tip = V3(tip.x, tip.y - 0.25f, tip.z);
     g_poleTops.push_back(p);
     // posters taped around the base
     if (frand() < 0.5f) {
@@ -387,6 +425,16 @@ static void signBoard(float x0, float x1, float y0, float y1, float z, const cha
     gTranslate((x0 + x1) * 0.5f, y0 + (y1 - y0) * 0.24f, z + 0.15f);
     text3DFit(name, (y1 - y0) * 0.55f, (x1 - x0) * 0.9f, st.text);
     gPop();
+    // lit up after dark
+    SavedColor keep;
+    glowBegin();
+    setc(mulc(st.board, 0.3f));
+    rectZ(x0, y0, x1, y1, z + 0.145f);
+    gPush();
+    gTranslate((x0 + x1) * 0.5f, y0 + (y1 - y0) * 0.24f, z + 0.152f);
+    text3DFit(name, (y1 - y0) * 0.55f, (x1 - x0) * 0.9f, mulc(st.text, 0.8f));
+    gPop();
+    glowEnd();
 }
 
 // Shelves of colourful goods seen through an open shopfront.
@@ -461,6 +509,15 @@ static void hoarding(float cx, float y, float z, float w) {
     gTranslate(0, -1.1f, 0);
     text3DFit(h[1], 0.5f, w * 0.8f, mulc(st.text, 0.9f));
     gPop();
+    // floodlit at night, brighter at the bottom where the lamps are
+    SavedColor keep;
+    glowBegin();
+    glowQuadZ(cx - w / 2, y + 2.0f, cx + w / 2, y + 5.0f, z + 0.205f, mulc(st.board, 0.55f), mulc(st.board, 0.2f));
+    gPush();
+    gTranslate(cx, y + 3.6f, z + 0.212f);
+    text3DFit(h[0], 0.9f, w * 0.9f, mulc(st.text, 0.7f));
+    gPop();
+    glowEnd();
 }
 
 // Building in local frame: front at z=0 facing +Z, body back to z=-d, x from 0 to w.
@@ -507,6 +564,7 @@ static void building(float w, float d, int floors, const char* forcedShop, int c
         if (open) addDestL(name, (a + b) * 0.5f, 1.3f, SIDEWALK_H, 0);
         if (open) {
             shopGoods(a, b, -1.59f, gh, kirana);
+            glowShopFront(a, b, gh);
             setc(0.5f, 0.52f, 0.55f);
             box(a, gh - 0.75f, -1.62f, b, gh - 0.05f, -1.52f);
             setc(0.42f, 0.3f, 0.2f);
@@ -545,8 +603,10 @@ static void building(float w, float d, int floors, const char* forcedShop, int c
             for (float x = 0.8f; x < w - 1.0f; x += 2.6f) {
                 setc(frand() < 0.5f ? C(0.25f, 0.35f, 0.55f) : C(0.45f, 0.3f, 0.2f));
                 rectZ(x, y0 + 0.16f, x + 1.0f, y0 + 2.3f, 0.01f);
+                glowWindowZ(x, y0 + 0.16f, x + 1.0f, y0 + 2.3f, 0.015f, 0.2f);
                 setc(0.15f, 0.18f, 0.22f);
                 rectZ(x + 1.3f, y0 + 1.0f, x + 2.1f, y0 + 2.0f, 0.01f);
+                glowWindowZ(x + 1.3f, y0 + 1.0f, x + 2.1f, y0 + 2.0f, 0.015f, 0.6f);
             }
             laundry(0.4f, w - 0.4f, y0 + 2.5f, 1.1f);
             continue;
@@ -561,6 +621,7 @@ static void building(float w, float d, int floors, const char* forcedShop, int c
             else if (r < 0.8f) setc(0.25f, 0.45f, 0.45f);
             else setc(0.55f, 0.35f, 0.2f);
             rectZ(cx - 0.6f, y0 + 0.9f, cx + 0.6f, y0 + 2.35f, 0.075f);
+            glowWindowZ(cx - 0.6f, y0 + 0.9f, cx + 0.6f, y0 + 2.35f, 0.08f, 0.5f);
             if (frand() < 0.5f) {
                 gLighting(false);
                 setc(0.2f, 0.2f, 0.2f);
@@ -621,6 +682,7 @@ static void building(float w, float d, int floors, const char* forcedShop, int c
         for (float x = 1.2f; x < w - 1.4f; x += 3.0f) {
             setc(0.2f, 0.23f, 0.28f);
             rectZ(x, y0 + 0.9f, x + 1.0f, y0 + 2.2f, -d - 0.01f);
+            glowWindowZ(x, y0 + 0.9f, x + 1.0f, y0 + 2.2f, -d - 0.015f, 0.35f);
             if (frand() < 0.25f) {
                 setc(0.85f, 0.86f, 0.84f);
                 box(x + 0.1f, y0 + 0.4f, -d - 0.45f, x + 0.8f, y0 + 0.85f, -d);
@@ -641,6 +703,7 @@ static void building(float w, float d, int floors, const char* forcedShop, int c
                 if (frand() < 0.5f) continue;
                 setc(0.2f, 0.23f, 0.28f);
                 rectZ(x, y0 + 0.9f, x + 0.9f, y0 + 2.1f, 0.01f);
+                glowWindowZ(x, y0 + 0.9f, x + 0.9f, y0 + 2.1f, 0.015f, 0.4f);
             }
         }
         if (frand() < 0.4f) {

@@ -237,13 +237,15 @@ static void resetProgress() {
         g_friends[i].pos = g_friends[i].home;
         g_friends[i].yaw = g_friends[i].homeYaw;
     }
+    todForChapter(0, false);
     g_hasProgress = false;
 }
 
-static int titleItems() { return g_hasProgress ? 6 : 5; }
-// title rows: play, difficulty, graphics, tutorial, [new game], quit
+static int titleItems() { return g_hasProgress ? 7 : 6; }
+// title rows: play, difficulty, graphics, time, tutorial, [new game], quit
+enum TitleRow { ROW_PLAY, ROW_DIFF, ROW_GFX, ROW_TIME, ROW_TUTORIAL, ROW_NEWGAME, ROW_QUIT };
 static int titleRow(int sel) {
-    if (!g_hasProgress && sel >= 4) return sel + 1;
+    if (!g_hasProgress && sel >= ROW_NEWGAME) return sel + 1;
     return sel;
 }
 
@@ -252,9 +254,18 @@ static void changeGraphics(int d) {
     saveGame();
 }
 
+static const char* TOD_BLURBS[TOD_MODES] = {
+    "The clock runs as you skate. Each chapter starts at its own hour; the finale is at night.",
+    "Always midday.", "Always sunset over the Sea Face.", "Always night, with the city lit up."};
+static void changeTime(int d) {
+    g_todMode = (g_todMode + d + TOD_MODES) % TOD_MODES;
+    saveGame();
+}
+
 static void startPlaying() {
     g_menu = MENU_NONE;
     g_newGameArmed = false;
+    bool fresh = !g_hasProgress;
     if (g_tutorialChoice && (!g_hasProgress || !g_tutorialDone)) {
         startTutorial();
     } else {
@@ -263,6 +274,7 @@ static void startPlaying() {
         startChapterClock();
         spawnAtChapter();
     }
+    if (fresh) startCutscene(1);  // CUT_INTRO: the opening film plays before anything else
 }
 
 static void changeDifficulty(int d) {
@@ -279,12 +291,14 @@ static void menuKey(int key) {
         if (key == 1) g_menuSel = (g_menuSel + 1) % n;
         if (key != 4) g_newGameArmed = g_newGameArmed && key != 0 && key != 1;
         int row = titleRow(g_menuSel);
-        if (row == 1 && (key == 2 || key == 3 || key == 4)) changeDifficulty(key == 2 ? -1 : 1);
-        if (row == 2 && (key == 2 || key == 3 || key == 4)) changeGraphics(key == 2 ? -1 : 1);
-        if (row == 3 && (key == 2 || key == 3 || key == 4)) g_tutorialChoice = !g_tutorialChoice;
+        bool change = key == 2 || key == 3 || key == 4;
+        if (row == ROW_DIFF && change) changeDifficulty(key == 2 ? -1 : 1);
+        if (row == ROW_GFX && change) changeGraphics(key == 2 ? -1 : 1);
+        if (row == ROW_TIME && change) changeTime(key == 2 ? -1 : 1);
+        if (row == ROW_TUTORIAL && change) g_tutorialChoice = !g_tutorialChoice;
         if (key == 4) {
-            if (row == 0) startPlaying();
-            if (row == 4) {
+            if (row == ROW_PLAY) startPlaying();
+            if (row == ROW_NEWGAME) {
                 if (!g_newGameArmed) {
                     g_newGameArmed = true;
                 } else {
@@ -294,20 +308,23 @@ static void menuKey(int key) {
                     startPlaying();
                 }
             }
-            if (row == 5) g_quitRequested = true;
+            if (row == ROW_QUIT) g_quitRequested = true;
         }
         if (key == 5) g_quitRequested = true;
         return;
     }
     if (g_menu == MENU_PAUSE) {
-        const int n = 5;
+        // rows: resume, difficulty, graphics, time, tutorial, quit
+        const int n = 6;
         if (key == 0) g_menuSel = (g_menuSel + n - 1) % n;
         if (key == 1) g_menuSel = (g_menuSel + 1) % n;
-        if (g_menuSel == 1 && (key == 2 || key == 3 || key == 4)) changeDifficulty(key == 2 ? -1 : 1);
-        if (g_menuSel == 2 && (key == 2 || key == 3 || key == 4)) changeGraphics(key == 2 ? -1 : 1);
+        bool change = key == 2 || key == 3 || key == 4;
+        if (g_menuSel == 1 && change) changeDifficulty(key == 2 ? -1 : 1);
+        if (g_menuSel == 2 && change) changeGraphics(key == 2 ? -1 : 1);
+        if (g_menuSel == 3 && change) changeTime(key == 2 ? -1 : 1);
         if (key == 4) {
             if (g_menuSel == 0) g_menu = MENU_NONE;
-            if (g_menuSel == 3) {
+            if (g_menuSel == 4) {
                 g_menu = MENU_NONE;
                 if (g_tutorial) {
                     g_tutorial = false;
@@ -316,7 +333,7 @@ static void menuKey(int key) {
                     startTutorial();
                 }
             }
-            if (g_menuSel == 4) g_quitRequested = true;
+            if (g_menuSel == 5) g_quitRequested = true;
         }
         if (key == 5) g_menu = MENU_NONE;
     }

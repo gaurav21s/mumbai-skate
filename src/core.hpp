@@ -200,10 +200,22 @@ static void pushVert(std::vector<float>& pos, std::vector<unsigned char>& col, c
     pos.push_back(v.p.x); pos.push_back(v.p.y); pos.push_back(v.p.z);
     for (int i = 0; i < 4; i++) col.push_back(v.c[i]);
 }
+// Night lights: while g_recGlow is set, triangles go to g_glowMesh instead,
+// which is drawn additively after dark (see nightlights.hpp). Glow code picks
+// its random numbers from glowRand so the city itself never changes.
+static bool g_recGlow = false;
+static Mesh g_glowMesh;
+static unsigned int g_glowSeed = 4242u;
+static float glowRand() {
+    g_glowSeed = g_glowSeed * 1664525u + 1013904223u;
+    return (float)((g_glowSeed >> 8) & 0xFFFFFF) / 16777216.0f;
+}
 static void emitTri(const RecV& a, const RecV& b, const RecV& c) {
     const RecV* vs[3] = {&a, &b, &c};
     for (int i = 0; i < 3; i++) {
-        if (g_lit) {
+        if (g_recGlow) {
+            pushVert(g_glowMesh.uv, g_glowMesh.uc, *vs[i]);
+        } else if (g_lit) {
             pushVert(g_recMesh.tv, g_recMesh.tc, *vs[i]);
             g_recMesh.tn.push_back(vs[i]->n.x); g_recMesh.tn.push_back(vs[i]->n.y); g_recMesh.tn.push_back(vs[i]->n.z);
         } else {
@@ -212,6 +224,7 @@ static void emitTri(const RecV& a, const RecV& b, const RecV& c) {
     }
 }
 static void emitLine(const RecV& a, const RecV& b) {
+    if (g_recGlow) return;
     pushVert(g_recMesh.lv, g_recMesh.lc, a);
     pushVert(g_recMesh.lv, g_recMesh.lc, b);
 }
@@ -292,11 +305,17 @@ static void gLighting(bool on) {
 
 static void recBegin() {
     g_recMesh.clear();
+    g_glowMesh.clear();
+    g_recGlow = false;
     g_rec = true;
     g_M = matIdentity();
     g_mStack.clear();
     g_lit = true;
 }
+
+// Records a night light: an unlit shape that only shows after dark.
+static void glowBegin() { g_recGlow = true; }
+static void glowEnd() { g_recGlow = false; }
 
 static size_t g_worldVerts = 0;
 static std::vector<Chunk> g_worldChunks;
@@ -307,6 +326,10 @@ static void buildChunks(const Mesh& src, std::vector<Chunk>& out, float cell);
 // Recorded meshes are uploaded once into a vertex buffer. Drawing them then
 // costs the CPU almost nothing, unlike display lists, which Apple's OpenGL
 // re-copies every frame.
+
+// Set for the 3D pass in the evening and at night: unlit shapes are drawn
+// lit from straight above, so they darken with the rest of the city.
+static bool g_unlitShade = false;
 
 struct GpuMesh {
     GLuint vbo;
@@ -373,7 +396,8 @@ static void drawMesh(GLuint handle) {
     }
     if (g.unlitN || g.lineN) {
         GLboolean lit = glIsEnabled(GL_LIGHTING);
-        glDisable(GL_LIGHTING);
+        if (g_unlitShade && lit) glNormal3f(0, 1, 0);  // after dark, painted lines and signs dim too
+        else glDisable(GL_LIGHTING);
         if (g.unlitN) {
             glVertexPointer(3, GL_FLOAT, sizeof(FlatVert), (const void*)g.unlitOff);
             glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(FlatVert), (const void*)(g.unlitOff + 12));
@@ -396,6 +420,13 @@ static GLuint recEnd() {
     const Mesh& m = g_recMesh;
     g_worldVerts = (m.tv.size() + m.uv.size() + m.lv.size()) / 3;
     return uploadMesh(m);
+}
+
+// Uploads the night lights recorded since recBegin (0 if there were none).
+static GLuint recEndGlow() {
+    GLuint h = uploadMesh(g_glowMesh);
+    g_glowMesh.clear();
+    return h;
 }
 
 // Stops recording and compiles what was captured as tiles (see buildChunks).
@@ -448,7 +479,9 @@ static void compileMesh(const Mesh& m) {
         glDisableClientState(GL_NORMAL_ARRAY);
     }
     if (!m.uv.empty() || !m.lv.empty()) {
-        glDisable(GL_LIGHTING);
+        GLboolean lit = glIsEnabled(GL_LIGHTING);
+        if (g_unlitShade && lit) glNormal3f(0, 1, 0);
+        else glDisable(GL_LIGHTING);
         if (!m.uv.empty()) {
             glVertexPointer(3, GL_FLOAT, 0, m.uv.data());
             glColorPointer(4, GL_UNSIGNED_BYTE, 0, m.uc.data());
@@ -459,7 +492,7 @@ static void compileMesh(const Mesh& m) {
             glColorPointer(4, GL_UNSIGNED_BYTE, 0, m.lc.data());
             glDrawArrays(GL_LINES, 0, (GLsizei)(m.lv.size() / 3));
         }
-        glEnable(GL_LIGHTING);
+        if (lit) glEnable(GL_LIGHTING);
     }
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_VERTEX_ARRAY);
@@ -711,6 +744,29 @@ static void line3(const V3& a, const V3& b) {
     gBegin(GL_LINES);
     gVertex(a.x, a.y, a.z);
     gVertex(b.x, b.y, b.z);
+    gEnd();
+}
+
+// Keeps the current colour and puts it back at the end of the scope.
+struct SavedColor {
+    float c[3];
+    SavedColor() { c[0] = g_cur[0]; c[1] = g_cur[1]; c[2] = g_cur[2]; }
+    ~SavedColor() { gColor(c[0], c[1], c[2]); }
+};
+
+// Quad in a plane of constant z, colour a at the bottom and b at the top.
+static void glowQuadZ(float x0, float y0, float x1, float y1, float z, const Col& a, const Col& b) {
+    gBegin(GL_QUADS);
+    setc(a); gVertex(x0, y0, z); gVertex(x1, y0, z);
+    setc(b); gVertex(x1, y1, z); gVertex(x0, y1, z);
+    gEnd();
+}
+
+// Light spilling across the ground ahead (+z) of a lamp, fading to nothing.
+static void glowSpill(float hw0, float hw1, float z0, float z1, float y, const Col& c) {
+    gBegin(GL_QUADS);
+    setc(c); gVertex(-hw0, y, z0); gVertex(hw0, y, z0);
+    setc(0, 0, 0); gVertex(hw1, y, z1); gVertex(-hw1, y, z1);
     gEnd();
 }
 

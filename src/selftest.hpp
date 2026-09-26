@@ -307,7 +307,51 @@ static int selfTest() {
     g_diff = DIFF_MEDIUM;
     applyDifficulty();
     check(!trickOpen(UL_GRAB) && g_chapters[1].goals[0].need == 4, "medium: grabs locked, 4 heelflips", (float)g_chapters[1].goals[0].need);
-    check(fabsf(g_chapters[5].timeLimit - 195.0f) < 0.5f, "medium: monsoon clock 3:15", g_chapters[5].timeLimit);
+    check(g_chapters[5].timeLimit == 0.0f && g_chapters[5].acts.size() == 6, "finale: six stops, no clock", (float)g_chapters[5].acts.size());
+
+    // finale: tasks open one stop at a time, and met friends ride along
+    {
+        g_careerOn = true;
+        g_unlockLevel = FINALE_LEVEL;
+        Chapter& fin = g_chapters[5];
+        for (size_t i = 0; i < fin.goals.size(); i++) fin.goals[i].have = 0;
+        updateAct();
+        check(g_act == 1, "finale: starts at stop 1", (float)g_act);
+        evTrick("Heelflip");
+        int heelHave = 0;
+        for (size_t i = 0; i < fin.goals.size(); i++)
+            if (fin.goals[i].act == 2 && fin.goals[i].kind == GK_TRICK) heelHave = fin.goals[i].have;
+        check(heelHave == 0, "finale: a stop 2 heelflip doesn't count during stop 1", (float)heelHave);
+        check(!friendRidesAlong(g_friends[0]), "finale: Raju waits until you meet him", 0.0f);
+        fin.goals[0].have = 1;  // met Raju
+        check(friendRidesAlong(g_friends[0]), "finale: Raju rides along once met", 1.0f);
+        for (size_t i = 0; i < fin.goals.size(); i++)
+            if (fin.goals[i].act == 1) fin.goals[i].have = fin.goals[i].need;
+        updateAct();
+        check(g_act == 2 && !friendRidesAlong(g_friends[1]), "finale: stop 2 opens, Priya waits", (float)g_act);
+        for (size_t i = 0; i < fin.goals.size(); i++) fin.goals[i].have = 0;
+        g_checkChapter = false;
+        g_unlockLevel = 99;
+        g_careerOn = false;
+        updateAct();
+    }
+    // the clock: fast-forwards to the next chapter's hour, and night is dark
+    {
+        g_todMode = TOD_AUTO;
+        g_tod = 14.0f;
+        todForChapter(5, true);
+        for (int i = 0; i < 1000 && g_todTarget >= 0; i++) todUpdate(0.02f, false);
+        check(fabsf(g_tod - 21.0f) < 0.01f, "clock: fast-forwards to 9 PM for the finale", g_tod);
+        computeSky();
+        check(g_sky.night > 0.99f && g_sky.lights > 0.99f, "clock: 9 PM is night with the lights on", g_sky.night);
+        g_tod = 12.0f;
+        computeSky();
+        check(g_sky.night < 0.01f && g_sky.lights < 0.01f, "clock: noon is plain daylight", g_sky.night);
+        g_tod = 18.4f;
+        computeSky();
+        check(g_sky.night > 0.3f && g_sky.night < 0.7f, "clock: 6:24 PM is sunset", g_sky.night);
+        g_tod = 8.5f;
+    }
 
     // tutorial: steps advance from real play and it hands over to chapter 1
     g_diff = DIFF_HARD;

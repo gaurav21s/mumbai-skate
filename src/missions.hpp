@@ -13,7 +13,6 @@
 
 static bool tutTarget(V3& out, std::string& label);  // tutorial.hpp
 
-enum MissionId { MIS_RAJU = 0, MIS_PRIYA, MIS_SAM, MIS_TUKARAM, MIS_CHINTU, MIS_DELIVERY = 10, MIS_JOB = 11 };
 static const char* MISSION_KEYS[5] = {"raju", "priya", "sam", "tukaram", "chintu"};
 static std::vector<bool> g_kiteGot;
 
@@ -72,8 +71,15 @@ struct Friend {
     float hopT, roll, pushT, cheerT, raceDelay;
     bool racing;
     int raceIdx;
+    int ped;                    // index in g_peds for friends who don't skate, else -1
+    bool follow;                // riding along behind the skater in the finale
 };
 static std::vector<Friend> g_friends;
+
+// The crowd that gathers at the Sea Face for the finale show.
+static std::vector<int> g_crowd;    // indices in g_peds
+static std::vector<V3> g_crowdAt;   // where each one stands for the show
+static const V3 SHOW_SPOT(55.0f, SIDEWALK_H, 146.0f);  // the viewing deck steps
 
 // Race route for Raju: plaza to Dadar station.
 static std::vector<V3> g_raceCps;
@@ -142,13 +148,38 @@ static void initFriends() {
         q.pos = q.home;
         q.yaw = q.homeYaw;
         q.hopT = 2.0f + (float)i;
+        q.ped = -1;
+        q.follow = false;
         if (!q.skater) {
             // drawn and bumped like any pedestrian
             addPed(q.home, q.home, q.pedStyle, false);
             g_peds.back().pos = q.home;
             g_peds.back().yaw = q.homeYaw;
+            q.ped = (int)g_peds.size() - 1;
         }
     }
+    // the crowd: either side of the viewing deck and behind it, clear of the
+    // landing below the steps. Uses its own seed so nothing else in the city moves.
+    unsigned int keepSeed = g_seed;
+    g_seed = 90210u;
+    g_crowd.clear();
+    g_crowdAt.clear();
+    const int styles[5] = {PED_MAN, PED_SAREE, PED_SALWAR, PED_KID, PED_MAN};
+    for (int i = 0; i < 20; i++) {
+        V3 at;
+        float yaw;
+        if (i < 7) { at = V3(31.5f + (float)(i % 3) * 1.6f, SIDEWALK_H, 141.5f + (float)(i / 3) * 2.2f); yaw = PI * 0.5f; }
+        else if (i < 14) { int k = i - 7; at = V3(74.0f + (float)(k % 3) * 1.6f, SIDEWALK_H, 138.0f + (float)(k / 3) * 2.4f); yaw = -PI * 0.5f; }
+        else { int k = i - 14; at = V3(43.0f + (float)k * 4.6f, SIDEWALK_H, 157.2f); yaw = PI; }
+        at.x += frange(-0.3f, 0.3f);
+        at.z += frange(-0.3f, 0.3f);
+        addPed(at, at, styles[i % 5], false);
+        g_peds.back().yaw = yaw + frange(-0.4f, 0.4f);
+        g_peds.back().pos = V3(at.x, -60.0f, at.z);  // out of sight under the city until the show
+        g_crowd.push_back((int)g_peds.size() - 1);
+        g_crowdAt.push_back(at);
+    }
+    g_seed = keepSeed;
     g_raceCps = {V3(-14, 0, -26), V3(0, 0, -22), V3(20, 0, -14.8f), V3(45, 0, -14.6f), V3(70, 0, -14.6f),
                  V3(90, 0, -23), V3(100, 0, -25.5f)};
 }
@@ -528,7 +559,7 @@ static void startJob(int slot) {
 static int nearFriend() {
     for (size_t i = 0; i < g_friends.size(); i++) {
         const Friend& f = g_friends[i];
-        if (f.racing) continue;
+        if (f.racing || f.follow) continue;
         V3 d = f.pos - P.pos;
         if (d.x * d.x + d.z * d.z < 3.0f * 3.0f && fabsf(d.y) < 1.2f) return (int)i;
     }
@@ -666,10 +697,10 @@ static std::vector<Goal>* focusList() {
 static Goal* focusGoal() {
     std::vector<Goal>* l = focusList();
     if (!l || l->empty()) return nullptr;
-    if (g_focus < 0 || g_focus >= (int)l->size() || goalDone((*l)[(size_t)g_focus])) {
+    if (g_focus < 0 || g_focus >= (int)l->size() || !goalOpen((*l)[(size_t)g_focus])) {
         g_focus = -1;
         for (size_t i = 0; i < l->size(); i++)
-            if (!goalDone((*l)[i])) {
+            if (goalOpen((*l)[i])) {
                 g_focus = (int)i;
                 break;
             }
@@ -683,7 +714,7 @@ static void cycleFocus() {
     int n = (int)l->size();
     for (int k = 1; k <= n; k++) {
         int i = (g_focus + k + n) % n;
-        if (!goalDone((*l)[(size_t)i])) {
+        if (goalOpen((*l)[(size_t)i])) {
             g_focus = i;
             break;
         }
@@ -791,12 +822,12 @@ static float g_friendCheerCd = 0;
 
 // Kinematic skating along a path: steer toward the target, ride the ground,
 // fly off drops, ollie now and then.
-static void friendSkate(Friend& f, const V3& target, float speed, float dt) {
+static void friendSkate(Friend& f, const V3& target, float speed, float dt, float accel = 4.0f) {
     V3 d = target - f.pos;
     d.y = 0;
     float want = dirYaw(d.x, d.z);
     f.yaw = wrapAngle(f.yaw + clampf(wrapAngle(want - f.yaw), -3.0f * dt, 3.0f * dt));
-    f.speed = approach(f.speed, speed, 4.0f * dt);
+    f.speed = approach(f.speed, speed, accel * dt);
     V3 fwd = yawDir(f.yaw);
     f.pos.x += fwd.x * f.speed * dt;
     f.pos.z += fwd.z * f.speed * dt;
@@ -827,11 +858,115 @@ static void friendSkate(Friend& f, const V3& target, float speed, float dt) {
     }
 }
 
+// ---------------------------------------------------------------- the crew rides along
+//
+// In the finale each friend you meet skates behind you for the rest of the
+// night. They follow the path you rode, so they go round corners instead of
+// through walls, and they catch up by jumping ahead when left far behind.
+
+static std::vector<V3> g_trail;  // where the skater has been, newest last
+
+static bool friendRidesAlong(const Friend& f) {
+    if (!f.skater || !inFinale()) return false;
+    const Chapter* c = curChapter();
+    for (size_t a = 0; a < c->acts.size(); a++) {
+        if (c->acts[a].lead != f.id) continue;
+        int act = (int)a + 1;
+        if (g_act != act) return g_act > act;
+        for (size_t i = 0; i < c->goals.size(); i++)
+            if (c->goals[i].act == act && c->goals[i].kind == GK_REACH) return goalDone(c->goals[i]);
+    }
+    return false;
+}
+
+static void updateTrail() {
+    if (!inFinale()) {
+        g_trail.clear();
+        return;
+    }
+    V3 p = P.pos;
+    p.y = groundAt(p.x, p.z, p.y + 0.3f).h;
+    if (!g_trail.empty() && len(p - g_trail.back()) > 18.0f) g_trail.clear();  // respawned
+    if (g_trail.empty() || len(p - g_trail.back()) > 0.8f) g_trail.push_back(p);
+    if (g_trail.size() > 90) g_trail.erase(g_trail.begin());
+}
+
+// Point `back` metres behind the skater along the trail. Past the start of
+// the trail it carries on straight behind the board.
+static V3 trailPoint(float back) {
+    V3 from = P.pos;
+    float acc = 0;
+    if (!g_trail.empty()) {
+        acc = len(P.pos - g_trail.back());
+        for (int i = (int)g_trail.size() - 1; i > 0; i--) {
+            float seg = len(g_trail[(size_t)i] - g_trail[(size_t)i - 1]);
+            if (acc + seg >= back) {
+                float t = (back - acc) / std::max(seg, 0.01f);
+                return g_trail[(size_t)i] + (g_trail[(size_t)i - 1] - g_trail[(size_t)i]) * t;
+            }
+            acc += seg;
+        }
+        from = g_trail.front();
+    }
+    V3 p = from - yawDir(P.yaw) * std::max(0.0f, back - acc);
+    p.y = groundAt(p.x, p.z, from.y + 0.5f).h;
+    return p;
+}
+
+// Where each rider sits in the formation: sideways (+ is to the skater's
+// right) and back along the trail, in metres. Two ride beside you, the
+// third a little further back.
+static const float CREW_SIDE[3] = {-2.3f, 2.3f, -4.2f}, CREW_BACK[3] = {2.2f, 2.2f, 4.8f};
+
+static void followSkater(Friend& f, int slot, float dt) {
+    slot = std::min(slot, 2);
+    V3 target = trailPoint(CREW_BACK[slot]);
+    V3 ahead = trailPoint(std::max(0.0f, CREW_BACK[slot] - 1.0f));
+    V3 dir = ahead - target;
+    dir.y = 0;
+    if (len(dir) < 0.01f) dir = yawDir(P.yaw);
+    dir = norm(dir);
+    V3 side(-dir.z, 0, dir.x);
+    V3 wide = target + side * CREW_SIDE[slot];
+    // stay on the trail where the side spot is inside a wall or over a drop
+    float gy = groundAt(wide.x, wide.z, target.y + 0.5f).h;
+    if (!blockedAt(wide.x, wide.z, target.y, 0.4f) && fabsf(gy - target.y) < 0.6f) target = V3(wide.x, gy, wide.z);
+    V3 d = target - f.pos;
+    d.y = 0;
+    float dist = len(d);
+    V3 toP = P.pos - f.pos;
+    toP.y = 0;
+    if (dist > 28.0f || len(toP) > 40.0f) {
+        // left behind: catch up out of sight
+        f.pos = V3(target.x, groundAt(target.x, target.z, target.y + 0.5f).h, target.z);
+        f.yaw = P.yaw;
+        f.speed = hspeed();
+        f.air = false;
+        return;
+    }
+    if (dist < 0.5f) {
+        f.speed = approach(f.speed, 0, 10.0f * dt);
+        f.pos += yawDir(f.yaw) * (f.speed * dt);
+        if (!f.air) f.pos.y = groundAt(f.pos.x, f.pos.z, f.pos.y + 0.35f).h;
+        if (f.speed < 0.5f && len(toP) < 12.0f)
+            f.yaw = wrapAngle(f.yaw + wrapAngle(dirYaw(toP.x, toP.z) - f.yaw) * std::min(1.0f, dt * 3.0f));
+        return;
+    }
+    friendSkate(f, target, clampf(dist * 2.2f, 1.0f, 15.0f), dt, 12.0f);
+}
+
 static void updateFriends(float dt) {
     if (g_friendCheerCd > 0) g_friendCheerCd -= dt;
+    int slot = 0;
     for (size_t i = 0; i < g_friends.size(); i++) {
         Friend& f = g_friends[i];
+        f.follow = false;
         if (!f.skater) continue;
+        if (!f.racing && friendRidesAlong(f)) {
+            f.follow = true;
+            followSkater(f, slot++, dt);
+            continue;
+        }
         if (f.racing) {
             if (f.raceDelay > 0) {
                 f.raceDelay -= dt;
@@ -849,7 +984,11 @@ static void updateFriends(float dt) {
             }
             continue;
         }
-        if (g_friend[f.id] && !f.loop.empty() && !(g_talk.open && g_talk.kind == TALK_FRIEND && g_talk.who == (int)i)) {
+        bool waitHome = inFinale() && len(V3(f.home.x - f.pos.x, 0, f.home.z - f.pos.z)) > 1.5f;
+        if (waitHome) {
+            // in the finale everyone waits at their own spot until you come by
+            friendSkate(f, f.home, 6.5f, dt);
+        } else if (!inFinale() && g_friend[f.id] && !f.loop.empty() && !(g_talk.open && g_talk.kind == TALK_FRIEND && g_talk.who == (int)i)) {
             V3 t = f.loop[(size_t)f.wp % f.loop.size()];
             friendSkate(f, t, 6.5f, dt);
             if (len(V3(t.x - f.pos.x, 0, t.z - f.pos.z)) < 2.0f) f.wp = (f.wp + 1) % (int)f.loop.size();
@@ -863,8 +1002,17 @@ static void updateFriends(float dt) {
     }
 }
 
-// Crew members nearby shout when a combo lands.
+static const char* CROWD_LINES[] = {"CROWD: WAAH! EK AUR!", "CROWD: KYA BAAT HAI!", "CROWD: ONCE MORE, ONCE MORE!",
+                                    "CROWD: GANPATI BAPPA MORYA!", "CROWD: AAMCHI MUMBAI!", "CROWD: JHAKAAS!"};
+static float g_crowdCd = 0;
+
+// Crew members nearby shout when a combo lands, and so does the crowd at the show.
 static void friendsCheer(long total) {
+    if (seaFaceShow() && total >= 300 && g_crowdCd <= 0 && len(P.pos - SHOW_SPOT) < 50.0f) {
+        popup(CROWD_LINES[(int)(fxrand() * 5.99f)], C(1.0f, 0.85f, 0.5f), 24, 1.8f);
+        for (size_t k = 0; k < g_crowd.size(); k++) g_peds[(size_t)g_crowd[k]].bumpT = 0.9f;
+        g_crowdCd = 3.0f;
+    }
     if (total < 1500 || g_friendCheerCd > 0) return;
     for (size_t i = 0; i < g_friends.size(); i++) {
         const Friend& f = g_friends[i];
@@ -876,12 +1024,65 @@ static void friendsCheer(long total) {
     }
 }
 
+// ---------------------------------------------------------------- the finale's stages
+
+static int g_actShown = -1;  // stage last announced with a banner
+
+static void finaleUpdate(float dt) {
+    if (g_crowdCd > 0) g_crowdCd -= dt;
+    updateTrail();
+    // the crowd and Tukaram come out for the show
+    bool show = seaFaceShow();
+    for (size_t k = 0; k < g_crowd.size(); k++) {
+        Ped& p = g_peds[(size_t)g_crowd[k]];
+        V3 at = g_crowdAt[k];
+        p.pos = show ? at : V3(at.x, -60.0f, at.z);
+    }
+    for (size_t i = 0; i < g_friends.size(); i++) {
+        Friend& f = g_friends[i];
+        if (f.id != MIS_TUKARAM || f.ped < 0) continue;
+        V3 at = show ? V3(36.8f, SIDEWALK_H, 143.5f) : f.home;
+        Ped& p = g_peds[(size_t)f.ped];
+        if (len(p.pos - at) > 0.5f) {
+            p.pos = at;
+            p.yaw = show ? PI * 0.5f : f.homeYaw;
+        }
+    }
+    if (!inFinale()) {
+        g_actShown = -1;
+        return;
+    }
+    if (g_card != CARD_NONE || g_act == g_actShown) return;
+    Chapter* c = curChapter();
+    int n = (int)c->acts.size();
+    if (g_actShown > 0 && g_act > g_actShown) {
+        int pay = 0;
+        for (int a = g_actShown; a < g_act && a <= n; a++) pay += c->acts[(size_t)a - 1].rupees;
+        g_rupees += pay;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "STOP %d DONE!  +RS %d", g_actShown, pay);
+        popup(buf, C(0.5f, 1.0f, 0.6f), 30, 2.6f);
+        confetti(P.pos);
+        addXP(150, "stop");
+    }
+    if (g_act >= 1 && g_act <= n) {
+        const Act& a = c->acts[(size_t)g_act - 1];
+        char title[96];
+        snprintf(title, sizeof(title), "STOP %d OF %d:  %s", g_act, n, a.title);
+        banner(title, std::string(a.who) + ": " + a.line, C(1.0f, 0.75f, 0.3f), 5.5f);
+        if (g_act == 6) g_chai = 1.0f;  // Chintu's cutting chai, for the backflip
+    }
+    g_actShown = g_act;
+    g_focus = -1;
+}
+
 static void missionsUpdate(float dt) {
     if (g_banner.life > 0) {
         g_banner.t += dt;
         if (g_banner.t > g_banner.life) g_banner.life = 0;
     }
     updateFriends(dt);
+    finaleUpdate(dt);
     if (g_skipArmT > 0) {
         g_skipArmT -= dt;
         if (g_skipArmT <= 0) g_skipArmed = false;
@@ -974,7 +1175,7 @@ static bool objectiveTarget(V3& out, std::string& label) {
     Goal* fg = focusGoal();
     for (size_t i = 0; i < c->goals.size(); i++) {
         const Goal& g = c->goals[i];
-        if (goalDone(g)) continue;
+        if (!goalOpen(g)) continue;
         if (fg && &g != fg) continue;  // only the focused task (Tab picks another)
         if (g.hasAt) consider(g.at, g.text);
         if (g.kind == GK_LETTERS)

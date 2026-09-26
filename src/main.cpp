@@ -17,12 +17,15 @@
  *   traffic.hpp       traffic lights, cars, buses, trains, pedestrians
  *   city_seaface.hpp  the lane to the sea, the promenade and the Sea Link
  *   fx.hpp            particles, camera shake, rain
+ *   daynight.hpp      the clock, sky colours and light for each hour
  *   career.hpp        chapters, tasks, gaps, unlocks, gear, save file
  *   missions.hpp      friends, side missions, deliveries, the skate shop
  *   tutorial.hpp      the tutorial, title screen and pause menu
  *   shadows.hpp       sun shadows baked for the city and projected for moving things
  *   physics.hpp       riding, jumping, tricks, grinding, landing
  *   render.hpp        skater, friends, markers and world drawing, camera
+ *   nightlights.hpp   lit windows, lamps, headlights, festival lights, fireworks
+ *   cutscene.hpp      the opening and ending films
  *   hud.hpp           everything drawn on top of the 3D view
  *   selftest.hpp      scripted checks run by --selftest
  *
@@ -44,7 +47,11 @@
  *   --shot out.ppm 3        play for 3 seconds of game time, save a PPM screenshot, quit
  *   --at x y z yawDeg       start somewhere else (y is ground height, 0.18 on sidewalks)
  *   --push                  hold W during a --shot run
+ *   --clean                 hide the controls panel (for screenshots)
  *   --graphics low|medium|high   pick the graphics preset for this run (also in the menus)
+ *   --time 21.5             start the clock at this hour (0 to 24)
+ *   --level 5 --stop 6      start the finale at one of its six stops
+ *   --cutscene intro        play the opening film (or "ending"; use with --level 6)
  *
  * Controls are listed in the in-game panel (H hides it).
  */
@@ -62,12 +69,15 @@
 #include "player.hpp"
 #include "traffic.hpp"
 #include "fx.hpp"
+#include "daynight.hpp"
 #include "career.hpp"
 #include "missions.hpp"
 #include "tutorial.hpp"
 #include "physics.hpp"
 #include "shadows.hpp"
 #include "render.hpp"
+#include "nightlights.hpp"
+#include "cutscene.hpp"
 #include "hud.hpp"
 
 // ============================================================================
@@ -106,6 +116,11 @@ static void simStep(const Input& in) {
     tutorialUpdate(SIM_DT);
     careerUpdate(SIM_DT);
     missionsUpdate(SIM_DT);
+    // fireworks over the sea: through the finale's show, all through the
+    // legend card, and now and then on later nights at the Sea Face
+    bool legend = g_card == CARD_LEGEND || (g_card == CARD_COMPLETE && g_cardChapter == FINALE_LEVEL);
+    bool show = seaFaceShow() && g_sky.lights > 0.4f && P.pos.z > 40.0f;
+    fireworksUpdate(SIM_DT, legend || show, legend ? 0.35f : (inFinale() ? 0.9f : 2.6f));
     updateParticles(SIM_DT);
     // steam from the chai kettles near the skater
     for (size_t i = 0; i < g_stalls.size(); i++)
@@ -219,6 +234,10 @@ static void display() {
         g_camPos = c + V3(sinf(orbit) * 42.0f, 13.0f, cosf(orbit) * 42.0f);
         g_camLook = c + V3(0, 2.0f, 0);
         g_camYaw = dirYaw(c.x - g_camPos.x, c.z - g_camPos.z);
+    } else if (g_menu == MENU_NONE && g_cut != CUT_NONE) {
+        g_time += dt;
+        cutsceneStep(dt);
+        if (g_cut != CUT_NONE) cutsceneCamera();
     } else if (g_menu == MENU_NONE && !g_shopOpen) {
         g_time += dt;
         g_accum += dt;
@@ -297,6 +316,10 @@ static void keyDown(unsigned char k, int, int) {
         if (c == 27 || (c == 'p' && g_menu == MENU_PAUSE)) menuKey(5);
         return;
     }
+    if (g_cut != CUT_NONE) {
+        if (c == ' ' || c == 13 || c == 27) skipCutscene();
+        return;
+    }
     if (c == 27 || c == 'p') {
         g_menu = MENU_PAUSE;
         g_menuSel = 0;
@@ -355,6 +378,9 @@ int main(int argc, char** argv) {
     bool newGame = false;
     int forceLevel = -1;
     int gfxArg = -1;
+    float timeArg = -1.0f;
+    int stopArg = 0;
+    int cutArg = CUT_NONE;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--selftest")) test = true;
         else if (!strcmp(argv[i], "--bench")) g_bench = true;
@@ -363,6 +389,10 @@ int main(int argc, char** argv) {
             gfxArg = v == "low" ? GFX_LOW : (v == "high" ? GFX_HIGH : GFX_MEDIUM);
         }
         else if (!strcmp(argv[i], "--newgame")) newGame = true;
+        else if (!strcmp(argv[i], "--time") && i + 1 < argc) timeArg = (float)atof(argv[++i]);
+        else if (!strcmp(argv[i], "--stop") && i + 1 < argc) stopArg = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--clean")) g_showHelp = false;
+        else if (!strcmp(argv[i], "--cutscene") && i + 1 < argc) cutArg = strcmp(argv[++i], "ending") ? CUT_INTRO : CUT_ENDING;
         else if (!strcmp(argv[i], "--unlockall")) forceLevel = 99;
         else if (!strcmp(argv[i], "--level") && i + 1 < argc) forceLevel = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc) {
@@ -410,6 +440,7 @@ int main(int argc, char** argv) {
     recBegin();
     buildWorld();
     bakeWorldShadows(g_recMesh);
+    buildNightGlow();
     recEndChunks(g_worldChunks, 32.0f);
     if (g_shotFile || test)
         printf("world built at %.2fs, %d vertices in %d tiles, %d shadow vertices\n",
@@ -438,6 +469,19 @@ int main(int argc, char** argv) {
         printf("Loaded save from %s (chapter %d)\n", savePath().c_str(), g_unlockLevel + 1);
     }
     if (gfxArg >= 0) g_gfx = gfxArg;  // overrides the saved setting for this run
+    if (forceLevel >= 0) todForChapter(g_unlockLevel, false);
+    if (stopArg > 1 && forceLevel == FINALE_LEVEL) {
+        // skip ahead in the finale: the stops before this one are done
+        Chapter& fin = g_chapters[(size_t)FINALE_LEVEL];
+        for (size_t k = 0; k < fin.goals.size(); k++)
+            if (fin.goals[k].act < stopArg) fin.goals[k].have = fin.goals[k].need;
+        g_act = stopArg;
+        g_rain = stopArg <= 3 ? 1.0f : 0.0f;
+    }
+    if (timeArg >= 0) {
+        g_todMode = TOD_AUTO;
+        g_tod = wrapHour(timeArg);
+    }
     if (!g_noSave) atexit(saveGame);
     g_hasProgress = g_unlockLevel > 0 || g_score > 0;
     g_tutorialChoice = !g_tutorialDone;
@@ -454,6 +498,11 @@ int main(int argc, char** argv) {
     if (customSpawn) {
         resetPlayer(spawn, spawnYaw);
         updateCamera(0, true);
+    }
+    if (cutArg != CUT_NONE) {
+        g_menu = MENU_NONE;
+        g_card = CARD_NONE;
+        startCutscene(cutArg);
     }
     glutDisplayFunc(display);
     glutIdleFunc(idle);

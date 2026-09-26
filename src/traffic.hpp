@@ -80,6 +80,10 @@ static void initTraffic() {
             recBegin();
             drawVehicleMesh(v);
             v.list = recEnd();
+            g_rec = true;  // the lights go in a second mesh
+            drawVehicleGlow(v);
+            g_rec = false;
+            v.glow = recEndGlow();
             g_vehicles.push_back(v);
         }
     }
@@ -192,8 +196,8 @@ static void updateTraffic(float dt) {
 
 static void initTrains() {
     g_trains.clear();
-    Train a = {-150.0f, 1, 21.0f, -50.0f, 9, 0, {}};
-    Train b = {300.0f, -1, 18.0f, -46.0f, 9, 1, {}};
+    Train a = {-150.0f, 1, 21.0f, -50.0f, 9, 0, {}, {}};
+    Train b = {300.0f, -1, 18.0f, -46.0f, 9, 1, {}, {}};
     g_trains.push_back(a);
     g_trains.push_back(b);
     for (size_t i = 0; i < g_trains.size(); i++) bakeTrain(g_trains[i]);

@@ -43,6 +43,8 @@ struct Goal {
     std::string how, hint;          // short free tip, and the full walkthrough bought with G
     std::string baseHow, baseHint;
     bool hintPaid;
+    int act;                        // finale stage it belongs to, 0 for chapters without stages
+    Goal& inAct(int a) { act = a; return *this; }
     Goal& where(float x, float y, float z) { at = V3(x, y, z); hasAt = true; return *this; }
     Goal& tip(const std::string& h, const std::string& full) {
         how = baseHow = h;
@@ -69,6 +71,7 @@ static Goal mkGoal(int kind, const std::string& text, const std::string& key, in
     g.bx0 = g.bz0 = g.bx1 = g.bz1 = g.bymin = 0;
     g.hasAt = false;
     g.hintPaid = false;
+    g.act = 0;
     return g;
 }
 static bool goalDone(const Goal& g) { return g.have >= g.need; }
@@ -115,6 +118,18 @@ static void scaleGoal(Goal& g) {
     }
 }
 
+enum MissionId { MIS_RAJU = 0, MIS_PRIYA, MIS_SAM, MIS_TUKARAM, MIS_CHINTU, MIS_DELIVERY = 10, MIS_JOB = 11 };
+
+// One stage of a chapter that plays in stages (the finale). A friend leads
+// each one; their tasks only open once the stage before is done.
+struct Act {
+    const char* title;
+    const char* who;    // who says the line
+    const char* line;
+    int lead;           // friend id leading it, -1 for the whole crew
+    int rupees;         // paid when the stage is done
+};
+
 struct Chapter {
     const char* name;
     const char* english;
@@ -127,6 +142,7 @@ struct Chapter {
     float spawnYaw;
     int rupees;       // paid on completion
     std::vector<Goal> goals;
+    std::vector<Act> acts;  // empty unless the chapter plays in stages
 };
 static std::vector<Chapter> g_chapters;
 
@@ -350,12 +366,30 @@ static Chapter* curChapter() {
     return &g_chapters[g_unlockLevel];
 }
 
+// Stage of the current chapter: the lowest one with a task left, 0 if the
+// chapter has no stages. Kept up to date by updateAct().
+static int g_act = 0;
+static void updateAct() {
+    Chapter* c = curChapter();
+    int a = 0;
+    if (c && !c->acts.empty()) {
+        a = 1 << 20;
+        for (size_t i = 0; i < c->goals.size(); i++)
+            if (!goalDone(c->goals[i]) && c->goals[i].act > 0) a = std::min(a, c->goals[i].act);
+        if (a == 1 << 20) a = (int)c->acts.size() + 1;
+    }
+    g_act = a;
+}
+// Tasks from later stages stay closed until their stage comes up.
+static bool actOk(const Goal& g) { return g.act == 0 || g.act == g_act; }
+static bool goalOpen(const Goal& g) { return !goalDone(g) && actOk(g); }
+
 // Runs fn(goal, isMission) over every open task.
 template <typename F> static void forOpenGoals(F fn) {
     Chapter* c = curChapter();
     if (c)
         for (size_t i = 0; i < c->goals.size(); i++)
-            if (!goalDone(c->goals[i])) fn(c->goals[i], false);
+            if (goalOpen(c->goals[i])) fn(c->goals[i], false);
     if (g_careerOn && g_mis.on)
         for (size_t i = 0; i < g_mis.goals.size(); i++)
             if (!goalDone(g_mis.goals[i])) fn(g_mis.goals[i], true);
@@ -591,17 +625,73 @@ static void initChapters() {
     g_chapters.push_back(c);
 
     c = Chapter();
-    c.name = "BAARISH SESSION";
-    c.english = "Monsoon session";
-    c.brief = "It is pouring. Slippery roads, the whole crew out. Beat the score before the rain stops.";
+    c.name = "BAARISH KI RAAT";
+    c.english = "One last night session with the whole crew";
+    c.brief = "Six stops across the block with Raju, Priya, Sam, Tukaram and Chintu. Then the big show at the Sea Face.";
     c.reward1 = "GOLD DECK unlocked";
     c.reward2 = "You are a Mumbai Skate legend";
-    c.baseTime = 150;
+    c.baseTime = 0;
     c.spawn = SPAWN_POS; c.spawnYaw = SPAWN_YAW; c.rupees = 1000;
-    c.goals.push_back(mkGoal(GK_SCORE, "Score {p} points before time runs out", "", 1, 20000).tip("Keep chaining combos anywhere before the clock hits zero.",
-                          "Only banked points count. Long combos score far more than single tricks, so link kickflips, grinds, manuals and powerslides. The plaza has everything close together. The roads are slippery in the rain unless you bought soft wheels."));
-    c.goals.push_back(mkGoal(GK_COMBO_LEN, "Bank a {c} trick combo in the rain", "", 1, 6).tip("Link {c} tricks with manuals and powerslides between jumps.",
-                          "Manuals (N) and powerslides (S at speed) keep a combo alive between jumps. A good pattern is ollie + flip, land into a manual, ollie + flip, repeat."));
+    c.acts.push_back({"RAJU BULA RAHA HAI", "RAJU", "Aaj raat poora crew bahar hai! Meet me in the plaza, then warm up.", MIS_RAJU, 150});
+    c.acts.push_back({"PRIYA KA SET", "PRIYA", "Took you long enough. Come to the garden and show me heelflips.", MIS_PRIYA, 150});
+    c.acts.push_back({"SAM KA CAMERA", "SAM", "The site lights are on, bro. Night footage! Come film.", MIS_SAM, 150});
+    c.acts.push_back({"CHAI PE CHARCHA", "TUKARAM", "The rain has stopped! Bring cutting chai for everyone to the station.", MIS_TUKARAM, 150});
+    c.acts.push_back({"SADAK PE SHOR", "RAJU", "The whole road came out to watch. Give them a show!", -1, 150});
+    c.acts.push_back({"SEA FACE SHOW", "CHINTU", "Bhaiya! The whole block is at the Sea Face. Everyone wants to see you!", MIS_CHINTU, 0});
+    // 1: Raju and the plaza
+    c.goals.push_back(mkGoal(GK_REACH, "Meet Raju in the plaza", "", 1, 0).inAct(1)
+                          .area(-30.0f, -26.0f, -24.0f, -20.0f, -1.0f).where(-27.0f, 0.0f, -23.0f).tip("Ride over to Raju, just up the plaza from where you start.",
+                          "Raju waits by the yellow bar in the plaza, a few metres from the start. Roll up next to him. Once you meet a friend they skate behind you for the rest of the night."));
+    c.goals.push_back(mkGoal(GK_TRICK, "Land a kickflip for Raju (J)", "Kickflip", 1, 0).inAct(1).tip("Tap SPACE to jump, then press J in the air.",
+                          "Any kickflip counts. Roll forward, tap SPACE, and press J straight away while you are in the air."));
+    c.goals.push_back(mkGoal(GK_GRIND, "Grind the yellow plaza bar", "", 1, 0.3f).inAct(1).rail(RT_PLAZA_BAR)
+                          .where(-58.0f, 0.5f, -19.0f).tip("Ride alongside the low yellow rail, ollie, and land on top of it.",
+                          "The low yellow bar is in the middle of the plaza. Ride parallel to it, a little to one side, and tap SPACE. You lock on when you land over it."));
+    // 2: Priya at the garden
+    c.goals.push_back(mkGoal(GK_REACH, "Pick up Priya at the garden steps", "", 1, 0).inAct(2)
+                          .area(-103.0f, -33.0f, -94.0f, -25.0f, -1.0f).where(-98.5f, 0.0f, -29.0f).tip("Priya waits at the foot of the garden steps, west end of the plaza.",
+                          "Head west along the plaza to the garden steps. Priya is standing at the bottom. Ride up next to her."));
+    c.goals.push_back(mkGoal(GK_TRICK, "Land {n} heelflip{pl} (K)", "Heelflip", 2, 0).inAct(2).tip("Tap SPACE to jump, then press K in the air.",
+                          "Same as a kickflip but with K. Every heelflip you land counts."));
+    c.goals.push_back(mkGoal(GK_GAP, "Ollie the garden stair gap", "Garden Stair Gap", 1, 0).inAct(2)
+                          .where(-106.0f, 1.0f, -30.0f).tip("From the top of the garden steps, ollie off and land past the bottom step.",
+                          "Ride up the garden steps onto the platform, turn around, and push back toward the steps. Press SPACE at the top edge and fly past the bottom step."));
+    // 3: Sam at the site
+    c.goals.push_back(mkGoal(GK_REACH, "Find Sam at the construction site", "", 1, 0).inAct(3)
+                          .area(40.0f, -27.0f, 52.0f, -15.0f, -1.0f).where(46.0f, 0.0f, -21.0f).tip("Sam is just inside the construction site gate, east of the main road crossing.",
+                          "Cross the main road and go east. The construction site is behind the blue fence; Sam waits inside the gap in the fence."));
+    c.goals.push_back(mkGoal(GK_GRAB, "Hold a grab for {s} sec for the camera", "", 1, 0.6f).inAct(3).tip("Jump big, hold I (or U), and let go before you land.",
+                          "Charge the ollie (hold SPACE, let go) or use a kicker, then hold I in the air and let go just before you land."));
+    c.goals.push_back(mkGoal(GK_GRIND, "Grind the big concrete pipe", "", 1, 0.5f).inAct(3).rail(RT_PIPE)
+                          .where(59.0f, 1.3f, -19.3f).tip("Ollie onto the big grey pipe near the site gate.",
+                          "The concrete pipe lies just inside the site gate. Ride alongside it, tap SPACE and steer onto the top."));
+    // 4: chai for the crew
+    c.goals.push_back(mkGoal(GK_CHAI, "Buy cutting chai for the crew (F)", "", 1, 0).inAct(4).tip("Stop at any chai stall and press F.",
+                          "The arrow points to the nearest chai stall. Stop next to it and press F. It costs RS 10."));
+    c.goals.push_back(mkGoal(GK_REACH, "Bring the chai to Tukaram at Dadar station", "", 1, 0).inAct(4)
+                          .area(98.0f, -31.0f, 110.0f, -20.0f, -1.0f).where(104.0f, 0.0f, -25.5f).tip("Tukaram waits in front of Dadar station, at the east end of the block.",
+                          "Ride east along the main road side until you reach the station. Tukaram stands in front of the ticket hall."));
+    c.goals.push_back(mkGoal(GK_TRICK, "Land a manual (N)", "Manual", 1, 0).inAct(4).tip("Press N as you roll, and keep the needle in the middle with W and S.",
+                          "A manual is riding on the back wheels. Press N while rolling, balance with W and S, then ollie or press N again to put the nose down."));
+    // 5: the main road
+    c.goals.push_back(mkGoal(GK_GAP, "Hop over the road median", "Median Hop", 1, 0).inAct(5).tip("Ollie across the low divider in the middle of the main road.",
+                          "The main road has a raised median down its middle. Ride across the road, watch the traffic, and ollie over the median from one side to the other."));
+    c.goals.push_back(mkGoal(GK_SPIN, "Land a {d} spin", "", 1, 180).inAct(5).tip("Ollie, then hold A or D in the air.",
+                          "Hold A or D the whole time you are in the air. A normal ollie is enough for a {d}."));
+    c.goals.push_back(mkGoal(GK_COMBO, "Bank a {p} point combo for the crowd", "", 1, 1500).inAct(5).tip("Link two or three tricks before the blue bar runs out.",
+                          "Land a trick, then ollie into another one before the blue bar under the combo empties. A kickflip, a manual and a heelflip in a row is plenty."));
+    // 6: the show at the Sea Face
+    c.goals.push_back(mkGoal(GK_REACH, "Roll down to the Sea Face", "", 1, 0).inAct(6)
+                          .area(-141.0f, 121.0f, 141.0f, 160.0f, 0.1f).where(0.0f, 0.18f, 124.0f).tip("Take the cross road south, down the lane of shops, to the sea.",
+                          "From the main road crossing, head south down the cross road and the lane of shops. The whole block is waiting at the promenade."));
+    c.goals.push_back(mkGoal(GK_GRIND, "Grind the seawall ledge", "", 1, 0.5f).inAct(6).rail(RT_SEAWALL)
+                          .where(20.0f, 0.75f, 160.4f).tip("Ride along the low wall at the edge of the sea and ollie onto it.",
+                          "The seawall runs the whole length of the promenade. Ride parallel to it, close, and tap SPACE to land on top."));
+    c.goals.push_back(mkGoal(GK_GAP, "Jump the Sea Face steps", "Sea Face Steps", 1, 0).inAct(6)
+                          .where(55.0f, 1.0f, 150.0f).tip("Ride up onto the viewing deck, turn around and ollie down the steps.",
+                          "The viewing deck is the raised platform in the middle of the promenade. Ride up the ramp at its side, turn to face the steps, and ollie off the edge."));
+    c.goals.push_back(mkGoal(GK_TRICK, "Finish with a Bombay Backflip (B)", "Bombay Backflip", 1, 0).inAct(6).tip("Chintu filled your chai power. Ollie and press B straight away.",
+                          "Your chai power stays full for the show. Get some speed, ollie, and press B the moment you leave the ground. Land it and the night is yours."));
     g_chapters.push_back(c);
     applyDifficulty();
 }
@@ -609,6 +699,7 @@ static void initChapters() {
 // ---------------------------------------------------------------- chapter flow
 
 enum CardType { CARD_NONE, CARD_INTRO, CARD_COMPLETE, CARD_LEGEND };
+static const float LEGEND_CARD_SECS = 14.0f;
 static int g_card = CARD_NONE;
 static float g_cardT = 0;
 static int g_cardChapter = 0;
@@ -619,6 +710,7 @@ static int g_lettersGot = 0;
 static bool g_teleport = false;  // ask the driver to snap the camera after a respawn
 
 static void saveGame();
+static void startCutscene(int kind);  // cutscene.hpp
 
 static void startChapterClock() {
     g_chapterScore0 = g_score;
@@ -654,7 +746,20 @@ static void completeChapter() {
     confetti(P.pos);
     g_shake = 0.3f;
     addXP(500, "chapter");
+    // the sky time-lapses to the next chapter's hour behind the card
+    if (g_todMode == TOD_AUTO && g_unlockLevel < (int)g_chapters.size()) todForChapter(g_unlockLevel, true);
     saveGame();
+}
+
+// ---------------------------------------------------------------- the finale
+
+static const int FINALE_LEVEL = UL_LEGEND - 1;
+static bool inFinale() { return curChapter() && g_unlockLevel == FINALE_LEVEL; }
+// The show at the Sea Face: the finale's last stage, and every night after it.
+static bool seaFaceShow() {
+    if (!g_careerOn || g_tutorial) return false;
+    if (inFinale()) return g_act >= 6;
+    return g_unlockLevel >= UL_LEGEND;
 }
 
 static void checkChapterDone() {
@@ -700,10 +805,12 @@ static bool buyFood(int stallIdx) {
 // Per-step career bookkeeping: cards, timers, area tasks, chai stops.
 static void careerUpdate(float dt) {
     if (g_lockMsgT > 0) g_lockMsgT -= dt;
+    todUpdate(dt, g_careerOn && inFinale());
     // energy: boosting burns it, resting slowly brings it back up to about half
     if (g_boostT > 0) g_boostT = std::max(0.0f, g_boostT - dt);
     else if (g_energy < ENERGY_REST_CAP) g_energy = std::min(ENERGY_REST_CAP, g_energy + dt * (hspeed() < 0.5f ? 6.0f : 1.2f));
     if (!g_careerOn) return;
+    updateAct();
     if (g_card != CARD_NONE) {
         g_cardT += dt;
         if (g_card == CARD_COMPLETE && g_cardT > 5.0f) {
@@ -713,12 +820,13 @@ static void careerUpdate(float dt) {
                 spawnAtChapter();
                 startChapterClock();
             } else {
-                g_card = CARD_LEGEND;
-                g_cardT = 0;
+                // the ending film, then the credits card
+                g_card = CARD_NONE;
+                startCutscene(2);  // CUT_ENDING
             }
         } else if (g_card == CARD_INTRO && g_cardT > 6.0f) {
             g_card = CARD_NONE;
-        } else if (g_card == CARD_LEGEND && g_cardT > 9.0f) {
+        } else if (g_card == CARD_LEGEND && g_cardT > LEGEND_CARD_SECS) {
             g_card = CARD_NONE;
         }
     }
@@ -726,7 +834,7 @@ static void careerUpdate(float dt) {
     if (c) {
         for (size_t i = 0; i < c->goals.size(); i++) {
             Goal& g = c->goals[i];
-            if (goalDone(g)) continue;
+            if (!goalOpen(g)) continue;
             if (g.kind == GK_REACH && P.state == P_GROUND && P.pos.y >= g.bymin &&
                 inBox(P.pos, g.bx0, g.bz0, g.bx1, g.bz1))
                 bump(g, 1, false);
@@ -746,8 +854,10 @@ static void careerUpdate(float dt) {
         checkChapterDone();
         saveGame();
     }
-    // the sky follows the story: rain only during the monsoon chapter
-    float wantRain = (g_unlockLevel == UL_RAIN && c) ? 1.0f : 0.0f;
+    // for the show the chai power stays topped up, so the backflip is always there
+    if (inFinale() && g_act == 6 && P.state == P_GROUND && g_chai < 1.0f) g_chai = std::min(1.0f, g_chai + dt * 0.5f);
+    // the sky follows the story: the finale opens in the rain, and it stops for the show
+    float wantRain = (inFinale() && g_act >= 1 && g_act <= 3) ? 1.0f : 0.0f;
     g_rain = approach(g_rain, wantRain, dt * 0.25f);
 }
 
@@ -773,6 +883,7 @@ static void saveGame() {
     for (int i = 0; i < GEAR_COUNT; i++) fprintf(f, " %d", g_owned[i] ? 1 : 0);
     fprintf(f, "\ndeck %d\noutfit %d\ndifficulty %d\ntutorial %d\n", g_deck, g_outfit, g_diff, g_tutorialDone ? 1 : 0);
     fprintf(f, "wear %d %d %d %d\nenergy %.1f\nxp %ld\ngraphics %d\n", g_hat, g_glasses, g_neck, g_bag, g_energy, g_xp, g_gfx);
+    fprintf(f, "tod %.2f %d\n", g_todTarget >= 0 ? g_todTarget : g_tod, g_todMode);
     Chapter* c = curChapter();
     if (c && c->timeLimit <= 0) {
         fprintf(f, "goals");
@@ -792,6 +903,7 @@ static bool loadGame() {
     }
     std::vector<int> goals;
     int mask = 0;
+    bool sawTod = false;
     while (fgets(line, sizeof(line), f)) {
         char key[32];
         int off = 0;
@@ -812,6 +924,15 @@ static bool loadGame() {
         else if (k == "energy") g_energy = clampf((float)atof(rest), 0, 100);
         else if (k == "xp") g_xp = std::max(0L, atol(rest));
         else if (k == "graphics") g_gfx = (int)clampf((float)atoi(rest), 0, 2);
+        else if (k == "tod") {
+            float h = 0;
+            int m = 0;
+            if (sscanf(rest, "%f %d", &h, &m) == 2) {
+                g_tod = wrapHour(h);
+                g_todMode = std::min(std::max(m, 0), (int)TOD_MODES - 1);
+                sawTod = true;
+            }
+        }
         else if (k == "wear") sscanf(rest, "%d %d %d %d", &g_hat, &g_glasses, &g_neck, &g_bag);
         else if (k == "friends" || k == "owned" || k == "goals") {
             std::vector<int> v;
@@ -837,9 +958,11 @@ static bool loadGame() {
         g_lettersGot += g_letters[i].got ? 1 : 0;
     }
     applyDifficulty();
+    if (!sawTod) todForChapter(g_unlockLevel, false);
     Chapter* c = curChapter();
     if (c && goals.size() == c->goals.size())
         for (size_t i = 0; i < goals.size(); i++) c->goals[i].have = std::min(goals[i], c->goals[i].need);
+    updateAct();
     if (g_deck >= GEAR_COUNT || (g_deck >= 0 && !g_owned[g_deck])) g_deck = -1;
     if (g_outfit >= GEAR_COUNT || (g_outfit >= 0 && !g_owned[g_outfit])) g_outfit = -1;
     int* slots[4] = {&g_hat, &g_glasses, &g_neck, &g_bag};
